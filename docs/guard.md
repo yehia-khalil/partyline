@@ -45,6 +45,7 @@ The installer copies the defaults to `<config dir>/partyline/weights.json`, wher
 - `npm/pnpm/yarn version` and `docker compose down` have their own approve patterns, so they still need approval if you change `bash.default`.
 - The hook recognises a room server by its reply, not its name.
 - Decisions are logged to `<config dir>/partyline/log.jsonl`.
+- To see how a change weighs real commands, run `node hooks/harness.mjs 'git push' 'cat .env'`. It marks a throwaway session and prints each weight. `hooks/attacks.json` lists every known bypass and the everyday work that must stay allowed, and `npm test` checks all of them.
 
 ## Installer
 

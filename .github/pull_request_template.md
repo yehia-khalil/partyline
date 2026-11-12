@@ -11,4 +11,4 @@
 - [ ] `npm run check` and `npm test` pass
 - [ ] Tests cover the change in behaviour
 - [ ] The docs (README or docs/) are updated if usage or configuration changed
-- [ ] If this touches the guard hook: it doesn't loosen the guard, or the PR explains why and tests the case it opens up
+- [ ] If this touches the guard hook: it doesn't loosen the guard, or the PR explains why and tests the case it opens up. New blocked or allowed cases go in `hooks/attacks.json`

@@ -42,7 +42,7 @@ The installer copies the defaults to `<config dir>/partyline/weights.json`, wher
 
 - `tools` lists names or `prefix*` globs per weight. The most specific match wins.
 - `bash` lists regexes per weight. Each part of a compound command is weighed separately, and the heaviest part wins.
-- `npm/pnpm/yarn version` and `docker compose down` have their own approve patterns, so they still need approval if you change `bash.default`.
+- `npm/pnpm/yarn version`, `docker compose down`, database clients (`psql`, `mysql`, `mariadb`, `sqlite3`, `mongosh`, `redis-cli`) and cloud CLIs (`kubectl`, `terraform`, `aws`, `gcloud`, `az`, `pulumi`, `doctl`, `eksctl`, `oc`, `ansible`, `supabase`, `railway`) have their own approve patterns, so they still need approval if you change `bash.default`. Database clients need approval for any query, since a regex can't reliably tell a read from a write.
 - The hook recognises a room server by its reply, not its name.
 - Decisions are logged to `<config dir>/partyline/log.jsonl`.
 - To see how a change weighs real commands, run `node hooks/harness.mjs 'git push' 'cat .env'`. It marks a throwaway session and prints each weight. `hooks/attacks.json` lists every known bypass and the everyday work that must stay allowed, and `npm test` checks all of them.

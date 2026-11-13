@@ -200,7 +200,7 @@ test("the operator's own shell aliases are expanded before weighing", () => {
 	assert.equal(weigh("gs; gs"), "free", "the same alias twice in one line expands both times");
 });
 
-test("version changes and Compose shutdowns have explicit approve weights", (t) => {
+test("version changes, Compose shutdowns, databases and cloud CLIs have explicit approve weights", (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "guard-"));
 	t.after(() => rmSync(dir, { recursive: true, force: true }));
 	hook(dir, "PostToolUse", readRoom);
@@ -216,10 +216,27 @@ test("version changes and Compose shutdowns have explicit approve weights", (t) 
 		"docker compose down",
 		"docker compose down -v",
 		"docker-compose down --volumes",
+		"psql -c 'drop table users'",
+		"mysql -e 'delete from users' app",
+		"sqlite3 app.db < wipe.sql",
+		"mongosh --eval 'db.dropDatabase()'",
+		"redis-cli flushall",
+		"pulumi up --yes",
+		"doctl compute droplet delete web",
+		"oc delete project app",
+		"ansible-playbook site.yml",
+		"supabase db reset",
+		"railway up",
 	]) {
 		assert.equal(hook(dir, "PreToolUse", bash(command))?.hookSpecificOutput?.permissionDecision, "deny", command);
 	}
-	for (const command of ["npm view example version", "pnpm --version", "yarn --version"]) {
+	for (const command of [
+		"npm view example version",
+		"pnpm --version",
+		"yarn --version",
+		"grep -rn postgres src",
+		"cat docs/ocean.md",
+	]) {
 		assert.equal(hook(dir, "PreToolUse", bash(command)), null, command);
 	}
 	for (const command of ["docker compose ps", "docker compose logs"]) {

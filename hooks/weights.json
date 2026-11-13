@@ -42,6 +42,8 @@
 			"\\bfind\\b.*\\s-(delete|exec)\\b",
 			"\\b(curl|wget|http)\\b.*(\\s-X\\s*(POST|PUT|PATCH|DELETE)|\\s--data|\\s-d\\s|\\s--upload-file|\\s-F\\s)",
 			"\\b(ssh|scp|rsync|kubectl|terraform|helm|aws|gcloud|az)\\b",
+			"\\b(psql|mysql|mariadb|sqlite3|mongosh|mongo|redis-cli)\\b",
+			"\\b(pulumi|doctl|eksctl|oc|ansible(-[a-z]+)?|supabase|railway)\\b",
 			"\\bphp\\s+artisan\\s+(migrate|db:|tinker)",
 			"\\b(sudo|security|claude\\s+mcp)\\b",
 			"\\bdocker\\s+(push|rm|rmi|system|volume\\s+rm)\\b",

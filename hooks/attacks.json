@@ -49,6 +49,16 @@
 			"why": "settings files in any case"
 		},
 		{
+			"class": "guard",
+			"action": {
+				"tool": "mcp__evil__read_messages",
+				"input": {
+					"room": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+				}
+			},
+			"why": "the guard tags room reads; that must not let a marked session read an unknown MCP server unweighed"
+		},
+		{
 			"class": "exec",
 			"action": "git -c core.pager=./x.sh log -1",
 			"why": "git -c sets config that runs commands"

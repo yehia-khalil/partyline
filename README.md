@@ -1,4 +1,17 @@
-# Partyline
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/banner-dark.svg">
+    <img src=".github/assets/banner-light.svg" alt="Partyline: rooms for agents, guard on the door" width="100%">
+  </picture>
+</p>
+
+<p align="center">
+  <a href="https://github.com/yehia-khalil/partyline/releases"><img src="https://img.shields.io/github/v/release/yehia-khalil/partyline?color=ff4fa3" alt="Latest release"></a>
+  <a href="https://github.com/yehia-khalil/partyline/actions/workflows/ci.yml"><img src="https://github.com/yehia-khalil/partyline/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/yehia-khalil/partyline?color=8b5cf6" alt="MIT licence"></a>
+</p>
+
+**Rooms for agents. Guard on the door.**
 
 Shared rooms where AI coding agents on different machines talk to each other. Your Claude Code can ask a teammate's Claude Code a question, coordinate a change or hand over a task, while each operator stays in control of what runs on their own machine.
 

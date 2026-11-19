@@ -11,6 +11,27 @@ export interface Rooms {
 	post(team: string, roomId: string, sender: string, text: string): Promise<Message>;
 	read(team: string, roomId: string, since: number, limit: number): Promise<Message[]>;
 	lastSeq(team: string, roomId: string): Promise<number>;
+	/** Closes a room for posting and streaming, ends its open streams, and says when it will expire. */
+	close(team: string, roomId: string): Promise<{ expiresAt: string; alreadyClosed: boolean }>;
+	isClosed(team: string, roomId: string): Promise<boolean>;
+}
+
+export const DEFAULT_EXPIRY_DAYS = 30;
+
+/**
+ * Reads ROOM_EXPIRY_DAYS: how many days after its latest activity a room is deleted.
+ * Throws on anything but a whole number from 1 to 3650, so a bad setting fails closed.
+ */
+export function parseExpiryDays(value: string | undefined): number {
+	if (value === undefined || value === "") {
+		return DEFAULT_EXPIRY_DAYS;
+	}
+	const days = /^\d{1,4}$/.test(value) ? Number(value) : NaN;
+	if (!(days >= 1 && days <= 3650)) {
+		throw new Error("ROOM_EXPIRY_DAYS must be a whole number of days from 1 to 3650.");
+	}
+
+	return days;
 }
 
 const ROOM_ID = /^[0-9a-f]{32}$/;
@@ -57,6 +78,11 @@ export function matchSocketPath(url: URL): { team: string; roomId: string; since
  */
 export function formatPush(roomId: string, message: Message): string {
 	return `[partyline ${roomId}] new message #${message.seq} from ${message.sender}. Call read_messages with room ${roomId} and since ${message.seq - 1} to read it.`;
+}
+
+/** The last frame an open stream gets when its room is closed, so the watcher knows to stop. */
+export function formatClosed(roomId: string): string {
+	return `[partyline ${roomId}] room closed, no new messages will arrive. Stop watching this room.`;
 }
 
 /** The frame sent when a stream opens behind the room, so nothing posted while it was down is missed. */
@@ -190,8 +216,15 @@ function createServer(rooms: Rooms, { team, name }: Member, origin: string): Mcp
 		},
 		async ({ room, since, limit, guard }) => {
 			requireGuard(guard);
+			const messages = formatMessages(await rooms.read(team, room, since, limit));
 
-			return text(formatMessages(await rooms.read(team, room, since, limit)));
+			return text(
+				(await rooms.isClosed(team, room))
+					? `${messages}
+
+This room is closed.`
+					: messages,
+			);
 		},
 	);
 
@@ -202,7 +235,32 @@ function createServer(rooms: Rooms, { team, name }: Member, origin: string): Mcp
 				"How to be woken up whenever a new message lands in a room. Pass since (the Last seq you have read) to also be told about messages you missed.",
 			inputSchema: z.object({ room: roomIdSchema, since: z.number().int().min(0).optional() }),
 		},
-		async ({ room, since }) => text(watchInstructions(origin, team, room, since ?? (await rooms.lastSeq(team, room)))),
+		async ({ room, since }) => {
+			if (await rooms.isClosed(team, room)) {
+				throw new RoomError("This room is closed. It can still be read, but there is nothing new to watch for.");
+			}
+
+			return text(watchInstructions(origin, team, room, since ?? (await rooms.lastSeq(team, room))));
+		},
+	);
+
+	server.registerTool(
+		"close_room",
+		{
+			description:
+				"Close a room when its work is done: no new messages or streams, but it can still be read until it expires.",
+			inputSchema: z.object({ room: roomIdSchema }),
+		},
+		async ({ room }) => {
+			const { expiresAt, alreadyClosed } = await rooms.close(team, room);
+			const until = expiresAt.slice(0, 10);
+
+			return text(
+				alreadyClosed
+					? `Room ${room} was already closed. It can still be read until ${until}.`
+					: `Closed room ${room}. It can still be read until ${until}, then it is deleted.`,
+			);
+		},
 	);
 
 	return server;

@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
@@ -97,8 +98,9 @@ function listen(wsUrl) {
 		ws.onopen = resolve;
 		ws.onerror = () => reject(new Error("refused"));
 	});
+	const closed = new Promise((resolve) => ws.addEventListener("close", resolve));
 
-	return { ws, frames, opened };
+	return { ws, frames, opened, closed };
 }
 
 before(async () => {
@@ -211,6 +213,43 @@ test("bad input is rejected", async () => {
 	assert.equal(await call(TOKEN_A, "read_messages", { room: "0".repeat(32), guard: GUARD }), "No such room.");
 });
 
+test("a closed room refuses posts, watches and new streams, but can still be read", async () => {
+	const { roomId, wsUrl } = await createRoom();
+	await call(TOKEN_A, "post_message", { room: roomId, text: "final summary" });
+	const stream = listen(wsUrl);
+	await stream.opened;
+
+	assert.match(
+		await call(TOKEN_A2, "close_room", { room: roomId }),
+		/Closed room \S+\. It can still be read until \S+/,
+	);
+
+	// Open streams get one last notice, then close, so watchers stop.
+	await stream.closed;
+	assert.match(stream.frames.at(-1), /room closed, no new messages will arrive/);
+
+	assert.match(await call(TOKEN_A, "post_message", { room: roomId, text: "late" }), /This room is closed/);
+	assert.match(await call(TOKEN_A, "watch_room", { room: roomId }), /This room is closed/);
+	await assert.rejects(listen(wsUrl).opened);
+
+	const read = await call(TOKEN_A, "read_messages", { room: roomId, guard: GUARD });
+	assert.match(read, /final summary/);
+	assert.match(read, /This room is closed\.$/);
+	assert.match(
+		await call(TOKEN_A, "read_messages", { room: roomId, since: 1, guard: GUARD }),
+		/No new messages\.\s+This room is closed\./,
+	);
+
+	// Closing again is harmless.
+	assert.match(await call(TOKEN_A, "close_room", { room: roomId }), /already closed/);
+});
+
+test("another team cannot close a room", async () => {
+	const { roomId } = await createRoom(TOKEN_A);
+	assert.equal(await call(TOKEN_B, "close_room", { room: roomId }), "No such room.");
+	assert.match(await call(TOKEN_A, "post_message", { room: roomId, text: "still open" }), /Posted as #1/);
+});
+
 test("the sender name comes from the token and can't be chosen", async () => {
 	const { roomId } = await createRoom();
 	await call(TOKEN_A, "post_message", { room: roomId, sender: "bob-claude", text: "it's really alice" });
@@ -219,6 +258,24 @@ test("the sender name comes from the token and can't be chosen", async () => {
 		await call(TOKEN_A2, "read_messages", { room: roomId, guard: GUARD }),
 		/#1 \S+ alice-claude: it's really alice/,
 	);
+});
+
+test("the Node server refuses to start on a malformed ROOM_EXPIRY_DAYS and says why", { skip: Boolean(remote) }, () => {
+	for (const days of ["0", "abc", "1.5", "3651"]) {
+		const run = spawnSync(process.execPath, NODE_ARGS, {
+			env: {
+				...process.env,
+				PORT: "18799",
+				DATA_DIR: dataDir,
+				TEAMS: JSON.stringify({ core: { "alice-claude": TOKEN_A } }),
+				ROOM_EXPIRY_DAYS: days,
+			},
+			encoding: "utf8",
+			timeout: 10_000,
+		});
+		assert.equal(run.status, 1, days);
+		assert.match(run.stderr, /ROOM_EXPIRY_DAYS must be a whole number of days from 1 to 3650/);
+	}
 });
 
 test("the Node server refuses to start on a malformed TEAMS and says why", { skip: Boolean(remote) }, () => {
@@ -256,4 +313,23 @@ test("rooms survive a restart of the Node server", { skip: Boolean(remote) }, as
 	base = await startNode(18788);
 
 	assert.match(await call(TOKEN_A, "read_messages", { room: roomId, guard: GUARD }), /still here/);
+});
+
+test("the Node server deletes rooms idle longer than ROOM_EXPIRY_DAYS", { skip: Boolean(remote) }, async () => {
+	const { roomId: idle } = await createRoom();
+	await call(TOKEN_A, "post_message", { room: idle, text: "old news" });
+	const { roomId: active } = await createRoom();
+	await call(TOKEN_A, "post_message", { room: active, text: "fresh" });
+
+	// Age the idle room past the default 30 days while the server is down.
+	await stopNode();
+	const db = new DatabaseSync(join(dataDir, "partyline.db"));
+	const longAgo = new Date(Date.now() - 31 * 86_400_000).toISOString();
+	db.prepare("UPDATE rooms SET opened_at = ? WHERE room = ?").run(longAgo, `core:${idle}`);
+	db.prepare("UPDATE room_messages SET at = ? WHERE room = ?").run(longAgo, `core:${idle}`);
+	db.close();
+	base = await startNode(18789);
+
+	assert.equal(await call(TOKEN_A, "read_messages", { room: idle, guard: GUARD }), "No such room.");
+	assert.match(await call(TOKEN_A, "read_messages", { room: active, guard: GUARD }), /fresh/);
 });

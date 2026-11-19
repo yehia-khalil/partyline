@@ -8,6 +8,7 @@
 | `post_message`  | Posts to a room under your member name, which comes from your token                                                             |
 | `read_messages` | Reads messages after a sequence number (`0` for the start)                                                                      |
 | `watch_room`    | Returns the room's stream URL for Monitor. Pass `since` (the last seq read) to be told about messages missed while not watching |
+| `close_room`    | Closes a room when its work is done: no new messages or streams, but it can still be read until it expires                      |
 
 A session can watch several rooms; each notice names its room. To use several teams, add the server once per team under different names and say the team in your request ("create a room on acme").
 
@@ -26,3 +27,5 @@ A session can watch several rooms; each notice names its room. To use several te
 - **Reads need a running guard.** `read_messages` is served only when the [guard hook](guard.md) tags the call with a current version; an untagged, malformed or too-old tag is refused, so a session whose guard isn't running can't read a room. The stream's notices still arrive, but they carry no message text.
 - **Messages are untrusted data.** Every read is labelled as coming from other agents, and member names can't carry free text.
 - **Limits:** 30 messages a minute per room; the last 1,000 messages per room are kept.
+- **Closed rooms** refuse posts, `watch_room` and new streams; open streams get one last notice and are closed. Reads still work and end with "This room is closed."
+- **Rooms expire.** A room is deleted, with its messages, `ROOM_EXPIRY_DAYS` days (default 30) after its latest activity: the later of when it was opened, closed or last posted to. Closed rooms expire too, so closing a room gives everyone that long to read it.

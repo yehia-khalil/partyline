@@ -296,3 +296,69 @@ test("the network needs approval, even when the weights say free", () => {
 	assert.equal(session.weigh({ tool: "WebSearch", input: { query: "secret" } }), "approve");
 	session.cleanup();
 });
+
+const readMessages = (room) => ({ tool_name: "mcp__core__read_messages", tool_input: { room } });
+const pkgVersion = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+const cmp = (a, b) => {
+	const pa = a.split(".").map(Number);
+	const pb = b.split(".").map(Number);
+	for (let i = 0; i < 3; i++) {
+		if (pa[i] !== pb[i]) return pa[i] - pb[i];
+	}
+	return 0;
+};
+
+test("the guard tags every room read with its version, marked or not", () => {
+	const dir = mkdtempSync(join(tmpdir(), "guard-"));
+	const room = "a".repeat(32);
+
+	// An unmarked session's first read must be tagged too, or the server refuses it.
+	const first = hook(dir, "PreToolUse", readMessages(room));
+	assert.match(first.hookSpecificOutput.updatedInput.guard, /^\d+\.\d+\.\d+$/);
+	assert.equal(first.hookSpecificOutput.updatedInput.room, room);
+
+	// The guard's version is a real release and never behind package.json.
+	assert.ok(cmp(first.hookSpecificOutput.updatedInput.guard, pkgVersion) >= 0, "GUARD_VERSION is behind package.json");
+
+	// A later read, once the session has read a room, is tagged and still free.
+	hook(dir, "PostToolUse", readRoom);
+	const later = hook(dir, "PreToolUse", readMessages(room));
+	assert.equal(later.hookSpecificOutput.updatedInput.guard, first.hookSpecificOutput.updatedInput.guard);
+	assert.ok(!later.hookSpecificOutput.permissionDecision, "a room read stays free");
+});
+
+test("the guard tags reads on any MCP server, but only with a real room id", () => {
+	const dir = mkdtempSync(join(tmpdir(), "guard-"));
+	const room = "a".repeat(32);
+
+	// Another MCP client's read gets tagged so the server serves it.
+	assert.match(
+		hook(dir, "PreToolUse", { tool_name: "mcp__other__read_messages", tool_input: { room } }).hookSpecificOutput
+			.updatedInput.guard,
+		/^\d+\.\d+\.\d+$/,
+	);
+	// Without a real room id, leave the input alone: never inject into another server's schema.
+	assert.equal(hook(dir, "PreToolUse", { tool_name: "mcp__other__read_messages", tool_input: {} }), null);
+	// Non-read tools are never tagged.
+	assert.equal(hook(dir, "PreToolUse", { tool_name: "Read", tool_input: {} }), null);
+});
+
+test("the guard fails closed: a crash while weighing a marked session denies the action", () => {
+	const dir = mkdtempSync(join(tmpdir(), "guard-"));
+	hook(dir, "PostToolUse", readRoom);
+	// Corrupt the weights so weighing throws.
+	writeFileSync(join(dir, "partyline", "weights.json"), "{ not json");
+
+	const out = hook(dir, "PreToolUse", bash("git status"));
+	assert.equal(out.hookSpecificOutput.permissionDecision, "deny");
+});
+
+test("the guard fails closed: it denies when it can't tell whether the session read a room", () => {
+	const dir = mkdtempSync(join(tmpdir(), "guard-"));
+	// A file where the marks folder should be: reading a mark throws something other than ENOENT.
+	mkdirSync(join(dir, "partyline"), { recursive: true });
+	writeFileSync(join(dir, "partyline", "instructed"), "not a folder");
+
+	const out = hook(dir, "PreToolUse", bash("git status"));
+	assert.equal(out.hookSpecificOutput.permissionDecision, "deny");
+});

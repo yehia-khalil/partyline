@@ -43,6 +43,14 @@ import { fileURLToPath } from "node:url";
 const TIERS = ["free", "notify", "approve"];
 
 /**
+ * The guard stamps this on every room read, so the server can tell the guard is running and
+ * how old it is. It tracks the release: a test keeps it from falling behind package.json, so
+ * the release commit bumps it. The server refuses reads stamped below its own minimum, which
+ * rises only on a release that fixes a guard bypass.
+ */
+const GUARD_VERSION = "0.5.0";
+
+/**
  * UserPromptSubmit also fires for turns no human started: background task and Monitor
  * notifications, scheduled tasks, messages from other sessions. Those must not lift the mark.
  */
@@ -133,6 +141,24 @@ function readInput() {
 
 function markFile(sessionId) {
 	return join(marksDir, String(sessionId).replace(/[^A-Za-z0-9_-]/g, "_"));
+}
+
+/**
+ * Whether this session has read a room. Throws on any error other than a missing mark, so a
+ * marks folder the guard can't read fails closed (the caller denies) rather than reading as
+ * unmarked, which would let a marked session act unguarded.
+ */
+function isMarked(sessionId) {
+	try {
+		statSync(markFile(sessionId));
+
+		return true;
+	} catch (error) {
+		if (error?.code === "ENOENT") {
+			return false;
+		}
+		throw error;
+	}
 }
 
 function loadWeights() {
@@ -666,7 +692,6 @@ function respond(output) {
 
 const input = readInput();
 const sessionId = input.session_id ?? "unknown";
-mkdirSync(marksDir, { recursive: true });
 
 switch (input.hook_event_name) {
 	case "PostToolUse": {
@@ -676,6 +701,7 @@ switch (input.hook_event_name) {
 			break;
 		}
 
+		mkdirSync(marksDir, { recursive: true });
 		const known = roomServers();
 		if (!known.includes(server)) {
 			writeFileSync(roomServersFile, JSON.stringify([...known, server]));
@@ -699,20 +725,50 @@ switch (input.hook_event_name) {
 	}
 
 	case "PreToolUse": {
-		if (!existsSync(markFile(sessionId))) {
-			break;
-		}
-
-		const weights = loadWeights();
 		const toolName = input.tool_name ?? "";
-		const guarded = !READ_ONLY_TOOLS.has(toolName) && touchesGuard(toolName, input.tool_input, input.cwd);
-		const weight = guarded ? "approve" : weighAction(toolName, input.tool_input, weights, input.cwd);
-		const action = describe(toolName, input.tool_input);
+
+		// Tag every room read with the guard's version, so the server can tell the guard is running.
+		// Only reads carrying a real room id, so we never inject an unknown field into another
+		// server's strictly-typed read_messages. Deny never carries the tag: that read won't happen.
+		const tag =
+			/^mcp__.+__read_messages$/.test(toolName) && ROOM_ID.test(String(input.tool_input?.room ?? ""))
+				? { ...input.tool_input, guard: GUARD_VERSION }
+				: null;
+		const tagged = (rest = {}) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput: tag }, ...rest });
+
+		let weight;
+		let action;
+		let guarded;
+		try {
+			if (!isMarked(sessionId)) {
+				if (tag) {
+					respond(tagged());
+				}
+				break;
+			}
+
+			const weights = loadWeights();
+			guarded = !READ_ONLY_TOOLS.has(toolName) && touchesGuard(toolName, input.tool_input, input.cwd);
+			weight = guarded ? "approve" : weighAction(toolName, input.tool_input, weights, input.cwd);
+			action = describe(toolName, input.tool_input);
+		} catch (error) {
+			// Fail closed: if the guard can't tell whether the session read a room, or throws while
+			// weighing one that did, deny rather than let an unweighed action run.
+			log({ session: sessionId, event: "guard-error", error: String(error?.message ?? error) });
+			respond({
+				hookSpecificOutput: {
+					hookEventName: "PreToolUse",
+					permissionDecision: "deny",
+					permissionDecisionReason:
+						"partyline guard: the guard hit an unexpected error while checking this action against a session that " +
+						"may have read a room, so it is denying the action to stay safe. Stop and tell your operator the " +
+						"partyline guard is failing.",
+				},
+				systemMessage: "partyline: guard error, blocked to stay safe",
+			});
+		}
 		log({ session: sessionId, event: "weighed", weight, action, ...(guarded ? { guarded: true } : {}) });
 
-		if (weight === "notify") {
-			respond({ systemMessage: `partyline: acting on a room's instruction → ${action}` });
-		}
 		if (weight === "approve") {
 			respond({
 				hookSpecificOutput: {
@@ -726,6 +782,13 @@ switch (input.hook_event_name) {
 				},
 				systemMessage: `partyline: blocked until you approve → ${action}`,
 			});
+		}
+		if (weight === "notify") {
+			const message = `partyline: acting on a room's instruction → ${action}`;
+			respond(tag ? tagged({ systemMessage: message }) : { systemMessage: message });
+		}
+		if (tag) {
+			respond(tagged());
 		}
 		break;
 	}

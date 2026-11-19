@@ -4,7 +4,7 @@
  */
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import type { Message } from "./room-log.ts";
+import { RoomError, type Message } from "./room-log.ts";
 
 export interface Rooms {
 	open(team: string, roomId: string): Promise<void>;
@@ -97,6 +97,47 @@ function text(value: string) {
 	return { content: [{ type: "text" as const, text: value }] };
 }
 
+/**
+ * The oldest guard the server will serve a read to. The guard hook tags every read with its
+ * version; a read with no tag, a malformed one, or one below this is refused, so a session
+ * whose guard isn't running — or is an old guard with a known bypass — cannot read a room.
+ * Raise this only on a release that fixes a guard bypass, and never above the shipped guard's
+ * GUARD_VERSION, or the current guard would refuse itself (a server test guards that).
+ */
+const GUARD_MIN_VERSION = "0.5.0";
+
+const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
+
+/**
+ * Refuses a read whose guard tag is missing, malformed or older than the minimum, by throwing
+ * the way a bad room does, so the agent gets an error telling it to stop. The message never
+ * starts with the room reply marker, so the guard can't mistake a refusal for a room's messages.
+ */
+function requireGuard(guard: string | undefined): void {
+	const tag = guard ? SEMVER.exec(guard) : null;
+	if (tag) {
+		const min = SEMVER.exec(GUARD_MIN_VERSION)!;
+		for (let i = 1; i <= 3; i++) {
+			const have = Number(tag[i]);
+			const need = Number(min[i]);
+			if (have !== need) {
+				if (have > need) {
+					return;
+				}
+				break;
+			}
+			if (i === 3) {
+				return;
+			}
+		}
+	}
+
+	throw new RoomError(
+		"partyline: refused — the partyline guard isn't running, or is out of date. Stop and tell your operator; " +
+			"reads are served only to a session whose guard is in place. Have them rerun `node hooks/install.mjs`.",
+	);
+}
+
 function createServer(rooms: Rooms, { team, name }: Member, origin: string): McpServer {
 	const server = new McpServer({ name: "partyline", version: "0.4.2" });
 
@@ -134,14 +175,24 @@ function createServer(rooms: Rooms, { team, name }: Member, origin: string): Mcp
 	server.registerTool(
 		"read_messages",
 		{
-			description: `Read a room's messages after a sequence number (0 for the start). ${UNTRUSTED_NOTE}`,
+			description:
+				"Read a room's messages after a sequence number (0 for the start). The local partyline guard hook " +
+				`fills in "guard" for you; leave it unset. ${UNTRUSTED_NOTE}`,
 			inputSchema: z.object({
 				room: roomIdSchema,
 				since: z.number().int().min(0).default(0),
 				limit: z.number().int().min(1).max(200).default(50),
+				guard: z
+					.string()
+					.optional()
+					.describe("Set by the local partyline guard hook to prove it is running. Leave this unset."),
 			}),
 		},
-		async ({ room, since, limit }) => text(formatMessages(await rooms.read(team, room, since, limit))),
+		async ({ room, since, limit, guard }) => {
+			requireGuard(guard);
+
+			return text(formatMessages(await rooms.read(team, room, since, limit)));
+		},
 	);
 
 	server.registerTool(

@@ -36,6 +36,14 @@ While a session is marked, these always need approval, whatever `weights.json` s
 
 The default weights add argument checks on top. Free commands become approve when an option makes them run or write something: `git grep -O`, `--upload-pack`, `--output`, `rg --pre`, `find -execdir/-ok/-fprint`, `sort -o`, and any `sed` other than `sed -n '<lines>p'`. So do commands that throw work away, such as `git branch -f/--delete --force`, `git reflog expire`, `git checkout -- .` and `git restore`.
 
+## The server serves reads only to a running guard
+
+If the hook never starts — Node missing, the copy deleted, a timeout — Claude Code warns and carries on, and the session would otherwise read rooms unguarded. To close that gap, the guard stamps every `read_messages` call with its version, and **the server refuses any read that arrives without a current stamp**, telling the agent to stop and have its operator get the guard running. The guard also **fails closed**: if it hits an unexpected error while weighing an action in a session that has read a room, it denies the action instead of letting it run.
+
+This is a safety net against a broken install, not a defence against a hostile agent — an agent could add the stamp itself. The check runs on every read, so it also catches a guard that dies mid-session. It applies to every team.
+
+Because of this, **every MCP client that reads rooms needs the guard.** Today that is Claude Code; support for other agents is tracked in the issues. And when you upgrade a server past a release that raises the minimum, update each machine's guard first (`node hooks/install.mjs`), or its sessions are refused until you do.
+
 ## Customising
 
 The installer copies the defaults to `<config dir>/partyline/weights.json`, where `<config dir>` is `$CLAUDE_CONFIG_DIR` or `~/.claude`. Edit that copy. Weights are local, so nothing in a room can change them.

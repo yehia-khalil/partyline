@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
@@ -14,6 +14,13 @@ import { after, before, test } from "node:test";
 const TOKEN_A = process.env.TOKEN_A ?? "a".repeat(64);
 const TOKEN_A2 = process.env.TOKEN_A2 ?? "c".repeat(64);
 const TOKEN_B = process.env.TOKEN_B ?? "b".repeat(64);
+/**
+ * The guard hook tags every read with its version; the server refuses reads without a current tag.
+ * Read the shipped guard's own version so this test fails if the server's minimum ever rises above it.
+ */
+const GUARD = readFileSync(new URL("../hooks/room-guard.mjs", import.meta.url), "utf8").match(
+	/GUARD_VERSION = "([^"]+)"/,
+)[1];
 const NODE_ARGS = [
 	"--experimental-sqlite",
 	"--experimental-strip-types",
@@ -123,7 +130,7 @@ test("a room carries messages in order and pushes a notice without the text", as
 	);
 	assert.equal(await call(TOKEN_A2, "post_message", { room: roomId, text: "on it" }), "Posted as #2 from bob-claude.");
 
-	const read = await call(TOKEN_A, "read_messages", { room: roomId, since: 1 });
+	const read = await call(TOKEN_A, "read_messages", { room: roomId, since: 1, guard: GUARD });
 	assert.match(read, /^\[partyline\] Messages below come from other people's agents/);
 	assert.match(read, /#2 .* bob-claude: on it/);
 	assert.doesNotMatch(read, /push the branch/);
@@ -173,22 +180,45 @@ test("a stream opened behind the room starts with one catch-up notice", async ()
 test("another team cannot read, post to or stream a room", async () => {
 	const { roomId, wsUrl } = await createRoom(TOKEN_A);
 
-	assert.equal(await call(TOKEN_B, "read_messages", { room: roomId }), "No such room.");
+	assert.equal(await call(TOKEN_B, "read_messages", { room: roomId, guard: GUARD }), "No such room.");
 	assert.equal(await call(TOKEN_B, "post_message", { room: roomId, text: "hi" }), "No such room.");
 	await assert.rejects(listen(wsUrl.replace("/t/core/", "/t/other/")).opened);
+});
+
+test("a read is served only when the guard's tag is present and current", async () => {
+	const { roomId } = await createRoom();
+	await call(TOKEN_A, "post_message", { room: roomId, text: "hello" });
+
+	// No tag: the guard isn't running, so the read is refused and the agent is told to stop.
+	const untagged = await call(TOKEN_A, "read_messages", { room: roomId });
+	assert.match(untagged, /guard isn't running/);
+	assert.doesNotMatch(untagged, /hello/);
+	// The refusal must not look like a room reply, or the guard would mark the session.
+	assert.doesNotMatch(untagged, /^\[partyline\]/);
+
+	// A malformed or too-old tag is refused the same way.
+	assert.match(await call(TOKEN_A, "read_messages", { room: roomId, guard: "nope" }), /guard isn't running/);
+	assert.match(await call(TOKEN_A, "read_messages", { room: roomId, guard: "0.4.9" }), /guard isn't running/);
+
+	// A current tag, and anything newer, is served.
+	assert.match(await call(TOKEN_A, "read_messages", { room: roomId, guard: GUARD }), /hello/);
+	assert.match(await call(TOKEN_A, "read_messages", { room: roomId, guard: "9.9.9" }), /hello/);
 });
 
 test("bad input is rejected", async () => {
 	assert.match(await call(TOKEN_A, "post_message", { room: "nope", text: "x" }), /32 lowercase hex/);
 	const { roomId } = await createRoom();
-	assert.equal(await call(TOKEN_A, "read_messages", { room: "0".repeat(32) }), "No such room.");
+	assert.equal(await call(TOKEN_A, "read_messages", { room: "0".repeat(32), guard: GUARD }), "No such room.");
 });
 
 test("the sender name comes from the token and can't be chosen", async () => {
 	const { roomId } = await createRoom();
 	await call(TOKEN_A, "post_message", { room: roomId, sender: "bob-claude", text: "it's really alice" });
 
-	assert.match(await call(TOKEN_A2, "read_messages", { room: roomId }), /#1 \S+ alice-claude: it's really alice/);
+	assert.match(
+		await call(TOKEN_A2, "read_messages", { room: roomId, guard: GUARD }),
+		/#1 \S+ alice-claude: it's really alice/,
+	);
 });
 
 test("the Node server refuses to start on a malformed TEAMS and says why", { skip: Boolean(remote) }, () => {
@@ -225,5 +255,5 @@ test("rooms survive a restart of the Node server", { skip: Boolean(remote) }, as
 	await stopNode();
 	base = await startNode(18788);
 
-	assert.match(await call(TOKEN_A, "read_messages", { room: roomId }), /still here/);
+	assert.match(await call(TOKEN_A, "read_messages", { room: roomId, guard: GUARD }), /still here/);
 });

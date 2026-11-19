@@ -78,6 +78,16 @@ test("a room expires a set number of days after its latest activity", () => {
 	assert.deepEqual(log.expired(new Date(), 30), [ROOM]);
 });
 
+test("a room is expired from the exact moment its expiry time arrives", () => {
+	// A Cloudflare alarm runs with the clock reading exactly the time it was set for, so a room
+	// whose expiry is now must count as expired, or the alarm reschedules itself for the same instant.
+	const { log } = freshLog();
+	log.open(ROOM);
+	const expiry = log.expiresAt(ROOM, 30);
+	assert.deepEqual(log.expired(expiry, 30), [ROOM]);
+	assert.deepEqual(log.expired(new Date(expiry.getTime() - 1), 30), []);
+});
+
 test("deleting a room removes it and its messages", () => {
 	const { db, log } = freshLog();
 	log.open(ROOM);

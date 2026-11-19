@@ -92,12 +92,12 @@ export class RoomLog {
 		return new Date(Date.parse(last) + days * DAY_MS);
 	}
 
-	/** Every room whose latest activity is more than `days` before `now`. */
+	/** Every room whose expiry time (`days` after its latest activity) is `now` or earlier. */
 	expired(now: Date, days: number): string[] {
 		const cutoff = new Date(now.getTime() - days * DAY_MS).toISOString();
 
 		return this.sql
-			.all<{ room: string }>(`SELECT r.room FROM rooms r WHERE ${LAST_ACTIVITY} < ?`, cutoff)
+			.all<{ room: string }>(`SELECT r.room FROM rooms r WHERE ${LAST_ACTIVITY} <= ?`, cutoff)
 			.map((row) => row.room);
 	}
 

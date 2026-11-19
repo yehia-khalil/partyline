@@ -59,8 +59,9 @@ test("a room expires a set number of days after its latest activity", () => {
 	};
 
 	// Only the open time: expires 30 days after opening.
-	at(daysAgo(40), null, null);
-	assert.equal(log.expiresAt(ROOM, 30).toISOString(), new Date(Date.parse(daysAgo(40)) + 30 * DAY).toISOString());
+	const opened = daysAgo(40);
+	at(opened, null, null);
+	assert.equal(log.expiresAt(ROOM, 30).toISOString(), new Date(Date.parse(opened) + 30 * DAY).toISOString());
 	assert.deepEqual(log.expired(new Date(), 30), [ROOM]);
 
 	// A recent message keeps it alive.
@@ -69,9 +70,10 @@ test("a room expires a set number of days after its latest activity", () => {
 	assert.ok(log.expiresAt(ROOM, 30) > new Date());
 
 	// Closing restarts the clock: a room quiet for 29 days and closed 5 days ago has 25 days left.
-	at(daysAgo(40), daysAgo(29), daysAgo(5));
+	const closed = daysAgo(5);
+	at(daysAgo(40), daysAgo(29), closed);
 	assert.deepEqual(log.expired(new Date(), 30), []);
-	assert.equal(log.expiresAt(ROOM, 30).toISOString(), new Date(Date.parse(daysAgo(5)) + 30 * DAY).toISOString());
+	assert.equal(log.expiresAt(ROOM, 30).toISOString(), new Date(Date.parse(closed) + 30 * DAY).toISOString());
 
 	// A closed room still expires once its close is old enough.
 	at(daysAgo(60), daysAgo(50), daysAgo(31));

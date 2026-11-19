@@ -1,4 +1,4 @@
-FROM node:25-alpine
+FROM node:26-alpine
 
 WORKDIR /app
 ENV NODE_ENV=production PORT=8787 DATA_DIR=/data

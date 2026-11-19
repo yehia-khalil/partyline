@@ -1,10 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
-import { formatCatchUp, formatPush, matchSocketPath } from "../core/app.ts";
+import { formatCatchUp, formatClosed, formatPush, matchSocketPath, parseExpiryDays } from "../core/app.ts";
 import { type Message, RoomLog } from "../core/room-log.ts";
 
 /**
  * One room on Cloudflare. A single instance runs per team and room ID, so every message
- * lands here in order and is pushed to every open WebSocket.
+ * lands here in order and is pushed to every open WebSocket. Its alarm is kept at the
+ * room's expiry time (ROOM_EXPIRY_DAYS after its latest activity), when it deletes the room.
  */
 export class Room extends DurableObject<Env> {
 	private readonly log: RoomLog;
@@ -21,30 +22,101 @@ export class Room extends DurableObject<Env> {
 		return this.ctx.id.name ?? "";
 	}
 
-	async open(): Promise<void> {
-		this.log.open(this.key);
+	private get roomId(): string {
+		return this.key.split(":").at(-1) ?? "";
 	}
 
-	async post(sender: string, text: string): Promise<Message> {
-		const message = this.log.post(this.key, sender, text);
-		const pushed = formatPush(this.key.split(":").at(-1) ?? "", message);
+	private get expiryDays(): number {
+		return parseExpiryDays(this.env.ROOM_EXPIRY_DAYS);
+	}
+
+	/** Moves the alarm to the room's expiry time. Called whenever its latest activity changes. */
+	private async scheduleExpiry(): Promise<void> {
+		await this.ctx.storage.setAlarm(this.log.expiresAt(this.key, this.expiryDays).getTime());
+	}
+
+	/** Rooms made before expiry existed have no alarm: any room that is used gets one. */
+	private async ensureExpiry(): Promise<void> {
+		if (this.log.exists(this.key) && (await this.ctx.storage.getAlarm()) === null) {
+			await this.scheduleExpiry();
+		}
+	}
+
+	private send(frame: string): void {
 		for (const socket of this.ctx.getWebSockets()) {
 			try {
-				socket.send(pushed);
+				socket.send(frame);
 			} catch {
 				// A socket that has gone away is cleaned up by the runtime.
 			}
 		}
+	}
+
+	private endStreams(reason: string): void {
+		for (const socket of this.ctx.getWebSockets()) {
+			try {
+				socket.close(1000, reason);
+			} catch {
+				// Already closed.
+			}
+		}
+	}
+
+	async open(): Promise<void> {
+		this.log.open(this.key);
+		await this.scheduleExpiry();
+	}
+
+	async post(sender: string, text: string): Promise<Message> {
+		const message = this.log.post(this.key, sender, text);
+		this.send(formatPush(this.roomId, message));
+		await this.scheduleExpiry();
 
 		return message;
 	}
 
 	async read(since: number, limit: number): Promise<Message[]> {
+		await this.ensureExpiry();
+
 		return this.log.read(this.key, since, limit);
 	}
 
 	async lastSeq(): Promise<number> {
+		await this.ensureExpiry();
+
 		return this.log.lastSeq(this.key);
+	}
+
+	async isClosed(): Promise<boolean> {
+		await this.ensureExpiry();
+
+		return this.log.isClosed(this.key);
+	}
+
+	/** Named closeRoom, not close, to stay clear of any name the runtime gives special meaning. */
+	async closeRoom(): Promise<{ expiresAt: string; alreadyClosed: boolean }> {
+		const { alreadyClosed } = this.log.close(this.key);
+		this.send(formatClosed(this.roomId));
+		this.endStreams("room closed");
+		await this.scheduleExpiry();
+
+		return { expiresAt: this.log.expiresAt(this.key, this.expiryDays).toISOString(), alreadyClosed };
+	}
+
+	/**
+	 * Deletes the room once it has expired, or moves the alarm if activity pushed expiry later.
+	 * Reads the room from its own database rather than the object's name, which an alarm may not have.
+	 */
+	async alarm(): Promise<void> {
+		const days = this.expiryDays;
+		for (const room of this.log.expired(new Date(), days)) {
+			this.endStreams("room expired");
+			this.log.delete(room);
+		}
+		const next = this.log.rooms().map((room) => this.log.expiresAt(room, days).getTime());
+		if (next.length > 0) {
+			await this.ctx.storage.setAlarm(Math.min(...next));
+		}
 	}
 
 	/** Accepts a read-only WebSocket that receives every new message, after a catch-up notice for any it missed. */
@@ -52,14 +124,18 @@ export class Room extends DurableObject<Env> {
 		if (request.headers.get("Upgrade") !== "websocket") {
 			return new Response("Expected a WebSocket upgrade.", { status: 426 });
 		}
-		if (!this.log.isOpen(this.key)) {
+		if (!this.log.exists(this.key)) {
 			return new Response("No such room.", { status: 404 });
 		}
+		if (this.log.isClosed(this.key)) {
+			return new Response("This room is closed.", { status: 410 });
+		}
+		await this.ensureExpiry();
 
 		const [client, server] = Object.values(new WebSocketPair());
 		this.ctx.acceptWebSocket(server);
 		const since = matchSocketPath(new URL(request.url))?.since ?? null;
-		const catchUp = formatCatchUp(this.key.split(":").at(-1) ?? "", since, this.log.lastSeq(this.key));
+		const catchUp = formatCatchUp(this.roomId, since, this.log.lastSeq(this.key));
 		if (catchUp) {
 			server.send(catchUp);
 		}

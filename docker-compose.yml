@@ -13,6 +13,7 @@ services:
     environment:
       TEAMS: ${TEAMS:?Set TEAMS in .env}
       PUBLIC_URL: ${PUBLIC_URL:-}
+      ROOM_EXPIRY_DAYS: ${ROOM_EXPIRY_DAYS:-}
     ports:
       - "${PORT:-8787}:8787"
     volumes:

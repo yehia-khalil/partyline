@@ -3,6 +3,7 @@
  *
  * Environment:
  *   TEAMS       JSON object of team name to member name to token (required)
+ *   ROOM_EXPIRY_DAYS  days after its latest activity a room is deleted (default 30)
  *   PORT        port to listen on (default 8787)
  *   DATA_DIR    where partyline.db lives (default ./data)
  *   PUBLIC_URL  the https:// address agents reach it on, when behind a proxy
@@ -18,9 +19,11 @@ import { DatabaseSync } from "node:sqlite";
 import { type WebSocket, WebSocketServer } from "ws";
 import {
 	formatCatchUp,
+	formatClosed,
 	formatPush,
 	handleRequest,
 	matchSocketPath,
+	parseExpiryDays,
 	parseTeams,
 	type Rooms,
 	roomKey,
@@ -39,6 +42,14 @@ try {
 	process.exit(1);
 }
 
+let expiryDays: number;
+try {
+	expiryDays = parseExpiryDays(process.env.ROOM_EXPIRY_DAYS);
+} catch (error) {
+	console.error(`partyline: ${(error as Error).message}`);
+	process.exit(1);
+}
+
 mkdirSync(dataDir, { recursive: true });
 const db = new DatabaseSync(join(dataDir, "partyline.db"));
 db.exec("PRAGMA journal_mode = WAL");
@@ -47,6 +58,25 @@ const log = new RoomLog({
 });
 
 const listeners = new Map<string, Set<WebSocket>>();
+
+/** Ends a room's open streams, after an optional last frame. */
+function endStreams(key: string, frame: string | null, reason: string): void {
+	for (const socket of listeners.get(key) ?? []) {
+		if (frame) {
+			socket.send(frame);
+		}
+		socket.close(1000, reason);
+	}
+	listeners.delete(key);
+}
+
+/** Deletes every room idle for longer than ROOM_EXPIRY_DAYS. Runs at startup and then hourly. */
+function sweepExpiredRooms(): void {
+	for (const key of log.expired(new Date(), expiryDays)) {
+		endStreams(key, null, "room expired");
+		log.delete(key);
+	}
+}
 
 const rooms: Rooms = {
 	async open(team, roomId) {
@@ -66,6 +96,16 @@ const rooms: Rooms = {
 	},
 	async lastSeq(team, roomId) {
 		return log.lastSeq(roomKey(team, roomId));
+	},
+	async close(team, roomId) {
+		const key = roomKey(team, roomId);
+		const { alreadyClosed } = log.close(key);
+		endStreams(key, formatClosed(roomId), "room closed");
+
+		return { expiresAt: log.expiresAt(key, expiryDays).toISOString(), alreadyClosed };
+	},
+	async isClosed(team, roomId) {
+		return log.isClosed(roomKey(team, roomId));
 	},
 };
 
@@ -127,8 +167,12 @@ const sockets = new WebSocketServer({ noServer: true });
 server.on("upgrade", (request, socket, head) => {
 	const match = matchSocketPath(new URL(request.url ?? "/", "http://localhost"));
 	const key = match ? roomKey(match.team, match.roomId) : null;
-	if (!key || !log.isOpen(key)) {
+	if (!key || !log.exists(key)) {
 		socket.end("HTTP/1.1 404 Not Found\r\n\r\n");
+		return;
+	}
+	if (log.isClosed(key)) {
+		socket.end("HTTP/1.1 410 Gone\r\n\r\n");
 		return;
 	}
 
@@ -149,10 +193,15 @@ server.on("upgrade", (request, socket, head) => {
 	});
 });
 
+sweepExpiredRooms();
+const sweep = setInterval(sweepExpiredRooms, 60 * 60 * 1000);
+sweep.unref();
+
 server.listen(port, () => console.log(`partyline listening on :${port}, data in ${dataDir}`));
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
 	process.on(signal, () => {
+		clearInterval(sweep);
 		sockets.clients.forEach((ws) => ws.close(1001, "server shutting down"));
 		server.close(() => {
 			db.close();

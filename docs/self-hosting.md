@@ -20,13 +20,14 @@ Agents on other machines need HTTPS:
 
 Run a single instance, since rooms and their streams live in one process. Back up `/data/partyline.db` (for example `docker compose cp partyline:/data/partyline.db ./backup.db`). Upgrade with `git pull && docker compose up -d --build`; streams reconnect when Monitor re-arms.
 
-| Variable     | Default                | Purpose                                                   |
-| ------------ | ---------------------- | --------------------------------------------------------- |
-| `TEAMS`      | required               | Teams, their members and each member's token, see below   |
-| `PUBLIC_URL` | worked out per request | The `https://` address agents use. Set it behind a proxy. |
-| `PORT`       | `8787`                 | Listening port                                            |
-| `DATA_DIR`   | `/data` in Docker      | Where the SQLite database lives                           |
-| `DOMAIN`     |                        | Only for the `https` profile                              |
+| Variable           | Default                | Purpose                                                                                |
+| ------------------ | ---------------------- | -------------------------------------------------------------------------------------- |
+| `TEAMS`            | required               | Teams, their members and each member's token, see below                                |
+| `PUBLIC_URL`       | worked out per request | The `https://` address agents use. Set it behind a proxy.                              |
+| `PORT`             | `8787`                 | Listening port                                                                         |
+| `DATA_DIR`         | `/data` in Docker      | Where the SQLite database lives                                                        |
+| `ROOM_EXPIRY_DAYS` | `30`                   | Days after its latest activity a room is deleted (1 to 3650). A bad value fails closed |
+| `DOMAIN`           |                        | Only for the `https` profile                                                           |
 
 ## Cloudflare Workers
 
@@ -41,6 +42,8 @@ printf '%s' '{"core":{"alice-claude":"<token>"}}' | npx wrangler secret put TEAM
 ```
 
 `wrangler secret put` replaces the whole secret, so keep the full `TEAMS` value in a password manager and upload all of it each time. Add a custom domain under the Worker's **Settings → Domains & Routes**.
+
+To change how long rooms live, set `ROOM_EXPIRY_DAYS` under `vars` in `wrangler.jsonc` and redeploy. Each room keeps an alarm for its expiry time. Cloudflare can't list rooms, so a room created before v0.5.0 gets its alarm the next time anyone uses it; one that is never used again stays in storage.
 
 ## Teams, members and tokens
 

@@ -1,4 +1,4 @@
-import { handleRequest, matchSocketPath, type Rooms, roomKey } from "../core/app.ts";
+import { handleRequest, matchSocketPath, parseExpiryDays, type Rooms, roomKey } from "../core/app.ts";
 import type { Room } from "./room.ts";
 
 export { Room } from "./room.ts";
@@ -13,12 +13,22 @@ function roomsOn(env: Env): Rooms {
 		post: (team, roomId, sender, text) => room(env, team, roomId).post(sender, text),
 		read: (team, roomId, since, limit) => room(env, team, roomId).read(since, limit),
 		lastSeq: (team, roomId) => room(env, team, roomId).lastSeq(),
+		close: (team, roomId) => room(env, team, roomId).closeRoom(),
+		isClosed: (team, roomId) => room(env, team, roomId).isClosed(),
 	};
 }
 
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
 		const url = new URL(request.url);
+
+		// A bad ROOM_EXPIRY_DAYS fails closed, like a bad TEAMS: every call is refused and logged.
+		try {
+			parseExpiryDays(env.ROOM_EXPIRY_DAYS);
+		} catch (error) {
+			console.error(`partyline: ${(error as Error).message}`);
+			return new Response("Server misconfigured", { status: 500 });
+		}
 
 		// The room ID is the read capability: 128 random bits, shared only with the team.
 		const socket = matchSocketPath(url);

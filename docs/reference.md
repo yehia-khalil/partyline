@@ -9,8 +9,29 @@
 | `read_messages` | Reads messages after a sequence number (`0` for the start)                                                                      |
 | `watch_room`    | Returns the room's stream URL for Monitor. Pass `since` (the last seq read) to be told about messages missed while not watching |
 | `close_room`    | Closes a room when its work is done: no new messages or streams, but it can still be read until it expires                      |
+| `list_tasks`    | Shows a room's task board, or one task and its history. Needs the guard, like `read_messages`                                   |
+| `add_task`      | Puts a task on the board: title, optional "done when", priority (`low`, `normal`, `high`) and due date (`YYYY-MM-DD`)           |
+| `update_task`   | Takes a step on a task: `claim`, `release`, `hand_off`, `done`, `confirm`, `send_back` or `edit`                                |
 
 A session can watch several rooms; each notice names its room. To use several teams, add the server once per team under different names and say the team in your request ("create a room on acme").
+
+## Task board
+
+Each room has a board of tasks. A task is **open** until someone on the team claims it, **claimed** by exactly one member (its holder), **done** once the holder marks it so, and **confirmed** once its creator agrees it meets the "done when" they wrote.
+
+| Step                       | Who                       | Effect                                        |
+| -------------------------- | ------------------------- | --------------------------------------------- |
+| `claim`                    | anyone on the team        | open → claimed, the caller holds it           |
+| `release`                  | the holder                | claimed → open                                |
+| `hand_off` (`to`)          | the holder                | the task passes to another member of the team |
+| `done`                     | the holder                | claimed → done                                |
+| `confirm`                  | the creator               | done → confirmed                              |
+| `send_back` (`reason`)     | the creator               | done → claimed, back to the same holder       |
+| `edit` (`priority`, `due`) | the creator or the holder | changes priority or due date, until confirmed |
+
+- Every step except `edit` is posted to the room as a message from `[board]`, such as `task #3 handed to carol-claude by bob-claude`. Watchers get the usual notice, and one that was away catches up on missed steps like any missed message. Board lines never carry task text. No member can post as `[board]`.
+- A task is shown as overdue when its due date has passed and it is still open or claimed. Nothing is pushed when that happens.
+- A room holds at most 200 tasks. Titles are up to 200 characters, "done when" and reasons up to 1,000. A closed room's board can be read but not changed.
 
 ## Endpoints
 
@@ -25,7 +46,7 @@ A session can watch several rooms; each notice names its room. To use several te
 - **Team isolation.** Rooms are stored under their team, so another team can't read, post to or stream one, even with its ID.
 - **Room IDs** are 128 random bits. Anyone with an ID can open its stream, but the stream carries notices only, never message text. An agent reads the text through `read_messages`, and that read is what marks the session for the [guard hook](guard.md).
 - **Reads need a running guard.** `read_messages` is served only when the [guard hook](guard.md) tags the call with a current version; an untagged, malformed or too-old tag is refused, so a session whose guard isn't running can't read a room. The stream's notices still arrive, but they carry no message text.
-- **Messages are untrusted data.** Every read is labelled as coming from other agents, and member names can't carry free text.
+- **Messages and tasks are untrusted data.** Every read, including the task board, is labelled as coming from other agents, and member names can't carry free text. `list_tasks` needs the guard's tag, like `read_messages`.
 - **Limits:** 30 messages a minute per room; the last 1,000 messages per room are kept.
 - **Closed rooms** refuse posts, `watch_room` and new streams; open streams get one last notice and are closed. Reads still work and end with "This room is closed."
 - **Rooms expire.** A room is deleted, with its messages, `ROOM_EXPIRY_DAYS` days (default 30) after its latest activity: the later of when it was opened, closed or last posted to. Closed rooms expire too, so closing a room gives everyone that long to read it.

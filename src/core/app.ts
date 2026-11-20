@@ -4,7 +4,15 @@
  */
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { RoomError, type Message } from "./room-log.ts";
+import {
+	type Message,
+	type NewTask,
+	type Priority,
+	RoomError,
+	type Task,
+	type TaskChange,
+	type TaskEvent,
+} from "./room-log.ts";
 
 export interface Rooms {
 	open(team: string, roomId: string): Promise<void>;
@@ -14,6 +22,12 @@ export interface Rooms {
 	/** Closes a room for posting and streaming, ends its open streams, and says when it will expire. */
 	close(team: string, roomId: string): Promise<{ expiresAt: string; alreadyClosed: boolean }>;
 	isClosed(team: string, roomId: string): Promise<boolean>;
+	/** Adds a task to the room's board and pushes its board line to the room's streams. */
+	addTask(team: string, roomId: string, actor: string, task: NewTask): Promise<Task>;
+	/** Applies one step to a task and pushes its board line, if the step has one, to the room's streams. */
+	updateTask(team: string, roomId: string, actor: string, number: number, change: TaskChange): Promise<Task>;
+	listTasks(team: string, roomId: string, includeConfirmed: boolean): Promise<Task[]>;
+	getTask(team: string, roomId: string, number: number): Promise<{ task: Task; events: TaskEvent[] }>;
 }
 
 export const DEFAULT_EXPIRY_DAYS = 30;
@@ -119,6 +133,52 @@ function formatMessages(messages: Message[]): string {
 	return `${REPLY_MARKER} ${UNTRUSTED_NOTE}\n\n${lines.join("\n")}\n\nLast seq: ${messages.at(-1)!.seq}`;
 }
 
+/** The board, for list_tasks. Task text is other agents' writing, so it carries the same marker and note as messages. */
+function formatBoard(tasks: Task[], today: string): string {
+	if (tasks.length === 0) {
+		return `${REPLY_MARKER} The board is empty.`;
+	}
+
+	const lines = tasks.map((task) => {
+		const parts = [`#${task.number} [${task.status}] (${task.priority}) ${task.title}`];
+		if (task.holder) {
+			parts.push(`holder: ${task.holder}`);
+		}
+		parts.push(`created by: ${task.createdBy}`);
+		if (task.due) {
+			const overdue = task.due < today && (task.status === "open" || task.status === "claimed");
+			parts.push(`due: ${task.due}${overdue ? " (overdue)" : ""}`);
+		}
+		if (task.doneWhen) {
+			parts.push(`done when: ${task.doneWhen}`);
+		}
+
+		return parts.join(" | ");
+	});
+
+	return `${REPLY_MARKER} ${UNTRUSTED_NOTE}\n\n${lines.join("\n")}`;
+}
+
+/** One task and every step taken on it, for list_tasks with a task number. */
+function formatTaskHistory(task: Task, events: TaskEvent[], today: string): string {
+	const steps = events.map(
+		(event) => `${event.at} ${event.action} by ${event.actor}${event.detail ? `: ${event.detail}` : ""}`,
+	);
+
+	return `${formatBoard([task], today)}\n\nHistory:\n${steps.join("\n")}`;
+}
+
+/** True for a real calendar day written as YYYY-MM-DD. */
+function isDay(value: string): boolean {
+	return /^\d{4}-\d{2}-\d{2}$/.test(value) && new Date(`${value}T00:00:00Z`).toISOString().startsWith(value);
+}
+
+function checkDue(due: string | null | undefined): void {
+	if (typeof due === "string" && !isDay(due)) {
+		throw new RoomError("due must be a real date written as YYYY-MM-DD, e.g. 2026-12-01.");
+	}
+}
+
 function text(value: string) {
 	return { content: [{ type: "text" as const, text: value }] };
 }
@@ -164,7 +224,7 @@ function requireGuard(guard: string | undefined): void {
 	);
 }
 
-function createServer(rooms: Rooms, { team, name }: Member, origin: string): McpServer {
+function createServer(rooms: Rooms, { team, name }: Member, teamMembers: string[], origin: string): McpServer {
 	const server = new McpServer({ name: "partyline", version: "0.5.0" });
 
 	server.registerTool(
@@ -260,6 +320,118 @@ This room is closed.`
 					? `Room ${room} was already closed. It can still be read until ${until}.`
 					: `Closed room ${room}. It can still be read until ${until}, then it is deleted.`,
 			);
+		},
+	);
+
+	const prioritySchema = z.enum(["low", "normal", "high"]);
+
+	server.registerTool(
+		"list_tasks",
+		{
+			description:
+				"Show a room's task board, or one task and its history when you pass task. Confirmed tasks are hidden " +
+				'unless include_confirmed is true. The local partyline guard hook fills in "guard" for you; leave it unset. ' +
+				UNTRUSTED_NOTE,
+			inputSchema: z.object({
+				room: roomIdSchema,
+				task: z.number().int().min(1).optional(),
+				include_confirmed: z.boolean().default(false),
+				guard: z
+					.string()
+					.optional()
+					.describe("Set by the local partyline guard hook to prove it is running. Leave this unset."),
+			}),
+		},
+		async ({ room, task, include_confirmed, guard }) => {
+			requireGuard(guard);
+			const today = new Date().toISOString().slice(0, 10);
+			if (task !== undefined) {
+				const { task: found, events } = await rooms.getTask(team, room, task);
+
+				return text(formatTaskHistory(found, events, today));
+			}
+
+			return text(formatBoard(await rooms.listTasks(team, room, include_confirmed), today));
+		},
+	);
+
+	server.registerTool(
+		"add_task",
+		{
+			description:
+				"Put a task on a room's board. done_when says what finished looks like; you, as its creator, confirm it against that.",
+			inputSchema: z.object({
+				room: roomIdSchema,
+				title: z.string().min(1).max(200),
+				done_when: z.string().min(1).max(1000).optional(),
+				priority: prioritySchema.optional(),
+				due: z.string().optional().describe("A UTC day, YYYY-MM-DD."),
+			}),
+		},
+		async ({ room, title, done_when, priority, due }) => {
+			checkDue(due);
+			const task = await rooms.addTask(team, room, name, { title, doneWhen: done_when, priority, due });
+
+			return text(`Added task #${task.number}.`);
+		},
+	);
+
+	server.registerTool(
+		"update_task",
+		{
+			description:
+				"Take a step on a task: claim (an open task), release or hand_off (to: a team member) or done (as its holder), " +
+				"confirm or send_back (with a reason, as its creator), or edit its priority and due date (creator or holder).",
+			inputSchema: z.object({
+				room: roomIdSchema,
+				task: z.number().int().min(1),
+				action: z.enum(["claim", "release", "hand_off", "done", "confirm", "send_back", "edit"]),
+				to: z.string().regex(MEMBER_NAME, "to is a member name.").optional(),
+				reason: z.string().min(1).max(1000).optional(),
+				priority: prioritySchema.optional(),
+				due: z.string().nullable().optional().describe("A UTC day, YYYY-MM-DD, or null to clear it."),
+			}),
+		},
+		async ({ room, task, action, to, reason, priority, due }) => {
+			let change: TaskChange;
+			switch (action) {
+				case "hand_off":
+					if (!to) {
+						throw new RoomError("hand_off needs to: the member to hand the task to.");
+					}
+					if (!teamMembers.includes(to)) {
+						throw new RoomError(`${to} is not a member of team ${team}.`);
+					}
+					change = { action, to };
+					break;
+				case "send_back":
+					if (!reason) {
+						throw new RoomError("send_back needs a reason.");
+					}
+					change = { action, reason };
+					break;
+				case "edit":
+					if (priority === undefined && due === undefined) {
+						throw new RoomError("edit needs a priority or a due date.");
+					}
+					checkDue(due);
+					change = { action, priority: priority as Priority | undefined, due };
+					break;
+				default:
+					change = { action };
+			}
+			const updated = await rooms.updateTask(team, room, name, task, change);
+			const replies: Record<TaskChange["action"], string> = {
+				claim: `Claimed task #${task}.`,
+				release: `Released task #${task}.`,
+				hand_off: `Handed task #${task} to ${to}.`,
+				done: `Marked task #${task} done.`,
+				confirm: `Confirmed task #${task}.`,
+				send_back: `Sent task #${task} back to ${updated.holder}.`,
+				edit: `Updated task #${task}.`,
+			};
+
+			return text(replies[action]);
 		},
 	);
 
@@ -373,7 +545,9 @@ export async function handleRequest(
 			return new Response("Unauthorized", { status: 401 });
 		}
 
-		return createMcpHandler(() => createServer(rooms, member, origin)).fetch(request);
+		const teamMembers = members.filter((m) => m.team === member.team).map((m) => m.name);
+
+		return createMcpHandler(() => createServer(rooms, member, teamMembers, origin)).fetch(request);
 	}
 
 	if (url.pathname === "/") {

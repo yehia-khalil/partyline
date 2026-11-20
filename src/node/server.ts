@@ -78,16 +78,21 @@ function sweepExpiredRooms(): void {
 	}
 }
 
+/** Pushes the notice for a new message, including a board line, to the room's open streams. */
+function push(team: string, roomId: string, message: Message): void {
+	const pushed = formatPush(roomId, message);
+	for (const socket of listeners.get(roomKey(team, roomId)) ?? []) {
+		socket.send(pushed);
+	}
+}
+
 const rooms: Rooms = {
 	async open(team, roomId) {
 		log.open(roomKey(team, roomId));
 	},
 	async post(team, roomId, sender, text): Promise<Message> {
 		const message = log.post(roomKey(team, roomId), sender, text);
-		const pushed = formatPush(roomId, message);
-		for (const socket of listeners.get(roomKey(team, roomId)) ?? []) {
-			socket.send(pushed);
-		}
+		push(team, roomId, message);
 
 		return message;
 	},
@@ -106,6 +111,26 @@ const rooms: Rooms = {
 	},
 	async isClosed(team, roomId) {
 		return log.isClosed(roomKey(team, roomId));
+	},
+	async addTask(team, roomId, actor, task) {
+		const added = log.addTask(roomKey(team, roomId), actor, task);
+		push(team, roomId, added.message);
+
+		return added.task;
+	},
+	async updateTask(team, roomId, actor, number, change) {
+		const { task, message } = log.updateTask(roomKey(team, roomId), actor, number, change);
+		if (message) {
+			push(team, roomId, message);
+		}
+
+		return task;
+	},
+	async listTasks(team, roomId, includeConfirmed) {
+		return log.listTasks(roomKey(team, roomId), includeConfirmed);
+	},
+	async getTask(team, roomId, number) {
+		return log.getTask(roomKey(team, roomId), number);
 	},
 };
 

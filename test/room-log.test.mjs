@@ -111,3 +111,214 @@ test("a database from an older version gets the closed_at column", () => {
 	log.close(ROOM);
 	assert.equal(log.isClosed(ROOM), true);
 });
+
+// ---- Task board ----
+
+const ALICE = "alice-claude";
+const BOB = "bob-claude";
+const CAROL = "carol-claude";
+
+/** A room with one task added by alice. */
+function board(extra = {}) {
+	const { db, log } = freshLog();
+	log.open(ROOM);
+	log.addTask(ROOM, ALICE, { title: "build the API", doneWhen: "returns 200", ...extra });
+
+	return { db, log };
+}
+
+const boardLines = (log) =>
+	log
+		.read(ROOM, 0, 100)
+		.filter((m) => m.sender === "[board]")
+		.map((m) => m.text);
+
+test("the full hand-off: add, claim, hand off, done, confirm", () => {
+	const { log } = board();
+	log.updateTask(ROOM, BOB, 1, { action: "claim" });
+	log.updateTask(ROOM, BOB, 1, { action: "hand_off", to: CAROL });
+	log.updateTask(ROOM, CAROL, 1, { action: "done" });
+	const { task } = log.updateTask(ROOM, ALICE, 1, { action: "confirm" });
+
+	assert.equal(task.status, "confirmed");
+	assert.equal(task.holder, CAROL);
+	assert.equal(task.doneWhen, "returns 200");
+	assert.equal(task.priority, "normal");
+	assert.deepEqual(
+		log.getTask(ROOM, 1).events.map((e) => e.action),
+		["add", "claim", "hand_off", "done", "confirm"],
+	);
+	assert.deepEqual(boardLines(log), [
+		"task #1 added by alice-claude",
+		"task #1 claimed by bob-claude",
+		"task #1 handed to carol-claude by bob-claude",
+		"task #1 marked done by carol-claude",
+		"task #1 confirmed by alice-claude",
+	]);
+});
+
+test("only the holder can release, hand off or mark done; only the creator can confirm or send back", () => {
+	const { log } = board();
+	log.updateTask(ROOM, BOB, 1, { action: "claim" });
+	assert.throws(() => log.updateTask(ROOM, CAROL, 1, { action: "release" }), /only the holder/i);
+	assert.throws(() => log.updateTask(ROOM, CAROL, 1, { action: "hand_off", to: CAROL }), /only the holder/i);
+	assert.throws(() => log.updateTask(ROOM, ALICE, 1, { action: "done" }), /only the holder/i);
+	log.updateTask(ROOM, BOB, 1, { action: "done" });
+	assert.throws(() => log.updateTask(ROOM, BOB, 1, { action: "confirm" }), /only the creator/i);
+	assert.throws(() => log.updateTask(ROOM, BOB, 1, { action: "send_back", reason: "x" }), /only the creator/i);
+});
+
+test("steps only happen from the right status", () => {
+	const { log } = board();
+	assert.throws(() => log.updateTask(ROOM, ALICE, 1, { action: "done" }), /open/);
+	log.updateTask(ROOM, BOB, 1, { action: "claim" });
+	assert.throws(() => log.updateTask(ROOM, CAROL, 1, { action: "claim" }), /already claimed by bob-claude/);
+	assert.throws(() => log.updateTask(ROOM, ALICE, 1, { action: "confirm" }), /not marked done/i);
+	assert.throws(() => log.updateTask(ROOM, ALICE, 2, { action: "claim" }), /No task #2/);
+});
+
+test("the creator may confirm work they did themselves", () => {
+	const { log } = board();
+	log.updateTask(ROOM, ALICE, 1, { action: "claim" });
+	log.updateTask(ROOM, ALICE, 1, { action: "done" });
+	assert.equal(log.updateTask(ROOM, ALICE, 1, { action: "confirm" }).task.status, "confirmed");
+});
+
+test("send back returns the task to its holder", () => {
+	const { log } = board();
+	log.updateTask(ROOM, BOB, 1, { action: "claim" });
+	log.updateTask(ROOM, BOB, 1, { action: "done" });
+	const { task } = log.updateTask(ROOM, ALICE, 1, { action: "send_back", reason: "tests fail" });
+
+	assert.equal(task.status, "claimed");
+	assert.equal(task.holder, BOB);
+	assert.equal(log.getTask(ROOM, 1).events.at(-1).detail, "tests fail");
+	assert.equal(boardLines(log).at(-1), "task #1 sent back to bob-claude by alice-claude");
+});
+
+test("release reopens the task and clears the holder", () => {
+	const { log } = board();
+	log.updateTask(ROOM, BOB, 1, { action: "claim" });
+	const { task } = log.updateTask(ROOM, BOB, 1, { action: "release" });
+	assert.equal(task.status, "open");
+	assert.equal(task.holder, null);
+	assert.equal(boardLines(log).at(-1), "task #1 released by bob-claude");
+});
+
+test("hand off to the current holder is refused", () => {
+	const { log } = board();
+	log.updateTask(ROOM, BOB, 1, { action: "claim" });
+	assert.throws(() => log.updateTask(ROOM, BOB, 1, { action: "hand_off", to: BOB }), /already holds/);
+});
+
+test("edit changes priority and due, posts nothing, and is refused once confirmed", () => {
+	const { log } = board();
+	const before = boardLines(log).length;
+	const { task, message } = log.updateTask(ROOM, ALICE, 1, { action: "edit", priority: "high", due: "2099-01-01" });
+	assert.equal(message, null);
+	assert.equal(task.priority, "high");
+	assert.equal(task.due, "2099-01-01");
+	assert.equal(boardLines(log).length, before);
+	assert.equal(log.updateTask(ROOM, ALICE, 1, { action: "edit", due: null }).task.due, null);
+	assert.throws(() => log.updateTask(ROOM, BOB, 1, { action: "edit", priority: "low" }), /creator or the holder/i);
+
+	log.updateTask(ROOM, BOB, 1, { action: "claim" });
+	assert.equal(log.updateTask(ROOM, BOB, 1, { action: "edit", priority: "low" }).task.priority, "low");
+	log.updateTask(ROOM, BOB, 1, { action: "done" });
+	log.updateTask(ROOM, ALICE, 1, { action: "confirm" });
+	assert.throws(() => log.updateTask(ROOM, ALICE, 1, { action: "edit", priority: "high" }), /confirmed/);
+});
+
+test("a closed room's board is read-only", () => {
+	const { log } = board();
+	log.close(ROOM);
+	assert.throws(() => log.addTask(ROOM, ALICE, { title: "more" }), /closed/);
+	assert.throws(() => log.updateTask(ROOM, BOB, 1, { action: "claim" }), /closed/);
+	assert.equal(log.listTasks(ROOM, false).length, 1);
+});
+
+test("a room holds at most 200 tasks", () => {
+	const { db, log } = board();
+	const now = new Date().toISOString();
+	for (let n = 2; n <= 200; n++) {
+		db.prepare(
+			`INSERT INTO room_tasks (room, number, title, done_when, priority, due, created_by, holder, status, created_at, updated_at)
+			VALUES (?, ?, 'x', NULL, 'normal', NULL, ?, NULL, 'confirmed', ?, ?)`,
+		).run(ROOM, n, ALICE, now, now);
+	}
+	assert.throws(() => log.addTask(ROOM, ALICE, { title: "one too many" }), /200 tasks/);
+});
+
+test("a step at the rate limit is refused and changes nothing", () => {
+	const { log } = board();
+	for (let i = 0; i < 29; i++) {
+		log.post(ROOM, BOB, `filler ${i}`);
+	}
+	assert.throws(() => log.updateTask(ROOM, BOB, 1, { action: "claim" }), /Room limit/);
+	const { task, events } = log.getTask(ROOM, 1);
+	assert.equal(task.status, "open");
+	assert.equal(task.holder, null);
+	assert.deepEqual(
+		events.map((e) => e.action),
+		["add"],
+	);
+});
+
+test("listTasks orders by status, then priority, then number, and hides confirmed unless asked", () => {
+	const { log } = board();
+	log.addTask(ROOM, ALICE, { title: "two", priority: "high" });
+	log.addTask(ROOM, ALICE, { title: "three", priority: "low" });
+	log.addTask(ROOM, ALICE, { title: "four" });
+	log.updateTask(ROOM, BOB, 4, { action: "claim" });
+	log.updateTask(ROOM, BOB, 1, { action: "claim" });
+	log.updateTask(ROOM, BOB, 1, { action: "done" });
+	log.updateTask(ROOM, ALICE, 1, { action: "confirm" });
+
+	assert.deepEqual(
+		log.listTasks(ROOM, false).map((t) => t.number),
+		[2, 3, 4],
+	);
+	assert.deepEqual(
+		log.listTasks(ROOM, true).map((t) => t.number),
+		[2, 3, 4, 1],
+	);
+});
+
+test("task activity counts toward expiry", () => {
+	const { db, log } = board();
+	db.prepare("UPDATE rooms SET opened_at = ?").run(daysAgo(40));
+	db.prepare("UPDATE room_messages SET at = ?").run(daysAgo(40));
+	db.prepare("UPDATE room_task_events SET at = ?").run(daysAgo(1));
+	assert.deepEqual(log.expired(new Date(), 30), []);
+});
+
+test("deleting a room removes its tasks and history", () => {
+	const { db, log } = board();
+	log.delete(ROOM);
+	assert.equal(db.prepare("SELECT COUNT(*) AS n FROM room_tasks").get().n, 0);
+	assert.equal(db.prepare("SELECT COUNT(*) AS n FROM room_task_events").get().n, 0);
+});
+
+test("edits count toward the room's rate limit", () => {
+	const { log } = board();
+	for (let i = 0; i < 29; i++) {
+		log.updateTask(ROOM, ALICE, 1, { action: "edit", priority: i % 2 ? "high" : "low" });
+	}
+	assert.throws(() => log.updateTask(ROOM, ALICE, 1, { action: "edit", priority: "normal" }), /Room limit/);
+	assert.throws(() => log.post(ROOM, BOB, "and messages too"), /Room limit/);
+});
+
+test("a task's history shows its last 50 steps and counts the rest", () => {
+	const { db, log } = board();
+	const now = new Date().toISOString();
+	for (let seq = 2; seq <= 80; seq++) {
+		db.prepare(
+			"INSERT INTO room_task_events (room, number, seq, at, actor, action, detail) VALUES (?, 1, ?, ?, ?, 'edit', NULL)",
+		).run(ROOM, seq, now, ALICE);
+	}
+	const { events, earlier } = log.getTask(ROOM, 1);
+	assert.equal(events.length, 50);
+	assert.equal(events[0].seq, 31);
+	assert.equal(events.at(-1).seq, 80);
+	assert.equal(earlier, 30);
+});

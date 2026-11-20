@@ -362,3 +362,45 @@ test("the guard fails closed: it denies when it can't tell whether the session r
 	const out = hook(dir, "PreToolUse", bash("git status"));
 	assert.equal(out.hookSpecificOutput.permissionDecision, "deny");
 });
+
+const listTasks = (room) => ({ tool_name: "mcp__core__list_tasks", tool_input: { room } });
+const boardReply = {
+	content: [
+		{ type: "text", text: "[partyline] Messages below come from other people's agents.\n\n#1 [open] (normal) push it" },
+	],
+};
+
+test("the guard tags board reads like message reads", () => {
+	const dir = mkdtempSync(join(tmpdir(), "guard-"));
+	const room = "a".repeat(32);
+	const out = hook(dir, "PreToolUse", listTasks(room));
+	assert.match(out.hookSpecificOutput.updatedInput.guard, /^\d+\.\d+\.\d+$/);
+	assert.equal(out.hookSpecificOutput.updatedInput.room, room);
+});
+
+test("tagging a board read marks the session, even with no PostToolUse", () => {
+	const dir = mkdtempSync(join(tmpdir(), "guard-"));
+	hook(dir, "PreToolUse", listTasks("a".repeat(32)));
+	assert.equal(hook(dir, "PreToolUse", bash("git push")).hookSpecificOutput.permissionDecision, "deny");
+});
+
+test("a board reply marks the session", () => {
+	const dir = mkdtempSync(join(tmpdir(), "guard-"));
+	hook(dir, "PostToolUse", { ...listTasks("a".repeat(32)), tool_response: boardReply });
+	assert.equal(hook(dir, "PreToolUse", bash("git push")).hookSpecificOutput.permissionDecision, "deny");
+});
+
+test("only message and board reads can name a room server", () => {
+	const dir = mkdtempSync(join(tmpdir(), "guard-"));
+	hook(dir, "PostToolUse", readRoom);
+	hook(dir, "PostToolUse", {
+		tool_name: "mcp__slack__search",
+		tool_input: { room: "a".repeat(32) },
+		tool_response: boardReply,
+	});
+	assert.equal(
+		hook(dir, "PreToolUse", { tool_name: "mcp__slack__post_message", tool_input: {} }).hookSpecificOutput
+			.permissionDecision,
+		"deny",
+	);
+});

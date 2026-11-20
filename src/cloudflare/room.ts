@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { formatCatchUp, formatClosed, formatPush, matchSocketPath, parseExpiryDays } from "../core/app.ts";
-import { type Message, RoomLog } from "../core/room-log.ts";
+import { type Message, type NewTask, RoomLog, type Task, type TaskChange, type TaskEvent } from "../core/room-log.ts";
 
 /**
  * One room on Cloudflare. A single instance runs per team and room ID, so every message
@@ -91,6 +91,36 @@ export class Room extends DurableObject<Env> {
 		await this.ensureExpiry();
 
 		return this.log.isClosed(this.key);
+	}
+
+	async addTask(actor: string, task: NewTask): Promise<Task> {
+		const added = this.log.addTask(this.key, actor, task);
+		this.send(formatPush(this.roomId, added.message));
+		await this.scheduleExpiry();
+
+		return added.task;
+	}
+
+	async updateTask(actor: string, number: number, change: TaskChange): Promise<Task> {
+		const { task, message } = this.log.updateTask(this.key, actor, number, change);
+		if (message) {
+			this.send(formatPush(this.roomId, message));
+		}
+		await this.scheduleExpiry();
+
+		return task;
+	}
+
+	async listTasks(includeConfirmed: boolean): Promise<Task[]> {
+		await this.ensureExpiry();
+
+		return this.log.listTasks(this.key, includeConfirmed);
+	}
+
+	async getTask(number: number): Promise<{ task: Task; events: TaskEvent[]; earlier: number }> {
+		await this.ensureExpiry();
+
+		return this.log.getTask(this.key, number);
 	}
 
 	/** Named closeRoom, not close, to stay clear of any name the runtime gives special meaning. */

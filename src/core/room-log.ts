@@ -180,17 +180,7 @@ export class RoomLog {
 			throw new RoomError("This room is closed. It can still be read, but no new messages can be posted.");
 		}
 
-		const minuteAgo = new Date(Date.now() - 60_000).toISOString();
-		const [{ n }] = this.sql.all<{ n: number }>(
-			"SELECT COUNT(*) AS n FROM room_messages WHERE room = ? AND at > ?",
-			room,
-			minuteAgo,
-		);
-		if (n >= MAX_MESSAGES_PER_MINUTE) {
-			throw new RoomError(
-				`Room limit reached: ${MAX_MESSAGES_PER_MINUTE} messages a minute. Wait, and check with your operator before continuing.`,
-			);
-		}
+		this.assertRate(room);
 
 		const [message] = this.sql.all<Message>(
 			`INSERT INTO room_messages (room, seq, at, sender, text)
@@ -340,6 +330,9 @@ export class RoomLog {
 				break;
 		}
 
+		if (line === null) {
+			this.assertRate(room);
+		}
 		const message = line === null ? null : this.post(room, BOARD_SENDER, line);
 		const at = message?.at ?? new Date().toISOString();
 		const priority = change.action === "edit" && change.priority !== undefined ? change.priority : task.priority;
@@ -372,17 +365,25 @@ export class RoomLog {
 		);
 	}
 
-	/** One task and every step taken on it, oldest first. */
-	getTask(room: string, number: number): { task: Task; events: TaskEvent[] } {
+	/** One task and its last `limit` steps, oldest first, with how many earlier steps are not included. */
+	getTask(room: string, number: number, limit = 50): { task: Task; events: TaskEvent[]; earlier: number } {
 		this.assertExists(room);
 		const task = this.loadTask(room, number);
-		const events = this.sql.all<TaskEvent>(
-			"SELECT seq, at, actor, action, detail FROM room_task_events WHERE room = ? AND number = ? ORDER BY seq",
+		const events = this.sql
+			.all<TaskEvent>(
+				"SELECT seq, at, actor, action, detail FROM room_task_events WHERE room = ? AND number = ? ORDER BY seq DESC LIMIT ?",
+				room,
+				number,
+				limit,
+			)
+			.reverse();
+		const [{ total }] = this.sql.all<{ total: number }>(
+			"SELECT COUNT(*) AS total FROM room_task_events WHERE room = ? AND number = ?",
 			room,
 			number,
 		);
 
-		return { task, events };
+		return { task, events, earlier: total - events.length };
 	}
 
 	private loadTask(room: string, number: number): Task {
@@ -418,6 +419,24 @@ export class RoomLog {
 			action,
 			detail,
 		);
+	}
+
+	/** Messages (board lines included) and task edits share the room's per-minute limit. */
+	private assertRate(room: string): void {
+		const minuteAgo = new Date(Date.now() - 60_000).toISOString();
+		const [{ n }] = this.sql.all<{ n: number }>(
+			`SELECT (SELECT COUNT(*) FROM room_messages WHERE room = ? AND at > ?)
+				+ (SELECT COUNT(*) FROM room_task_events WHERE room = ? AND action = 'edit' AND at > ?) AS n`,
+			room,
+			minuteAgo,
+			room,
+			minuteAgo,
+		);
+		if (n >= MAX_MESSAGES_PER_MINUTE) {
+			throw new RoomError(
+				`Room limit reached: ${MAX_MESSAGES_PER_MINUTE} messages a minute. Wait, and check with your operator before continuing.`,
+			);
+		}
 	}
 
 	private assertBoardWritable(room: string): void {

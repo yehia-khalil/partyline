@@ -117,7 +117,7 @@ export class Room extends DurableObject<Env> {
 		return this.log.listTasks(this.key, includeConfirmed);
 	}
 
-	async getTask(number: number): Promise<{ task: Task; events: TaskEvent[] }> {
+	async getTask(number: number): Promise<{ task: Task; events: TaskEvent[]; earlier: number }> {
 		await this.ensureExpiry();
 
 		return this.log.getTask(this.key, number);

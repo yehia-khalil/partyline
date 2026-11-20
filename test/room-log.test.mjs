@@ -298,3 +298,27 @@ test("deleting a room removes its tasks and history", () => {
 	assert.equal(db.prepare("SELECT COUNT(*) AS n FROM room_tasks").get().n, 0);
 	assert.equal(db.prepare("SELECT COUNT(*) AS n FROM room_task_events").get().n, 0);
 });
+
+test("edits count toward the room's rate limit", () => {
+	const { log } = board();
+	for (let i = 0; i < 29; i++) {
+		log.updateTask(ROOM, ALICE, 1, { action: "edit", priority: i % 2 ? "high" : "low" });
+	}
+	assert.throws(() => log.updateTask(ROOM, ALICE, 1, { action: "edit", priority: "normal" }), /Room limit/);
+	assert.throws(() => log.post(ROOM, BOB, "and messages too"), /Room limit/);
+});
+
+test("a task's history shows its last 50 steps and counts the rest", () => {
+	const { db, log } = board();
+	const now = new Date().toISOString();
+	for (let seq = 2; seq <= 80; seq++) {
+		db.prepare(
+			"INSERT INTO room_task_events (room, number, seq, at, actor, action, detail) VALUES (?, 1, ?, ?, ?, 'edit', NULL)",
+		).run(ROOM, seq, now, ALICE);
+	}
+	const { events, earlier } = log.getTask(ROOM, 1);
+	assert.equal(events.length, 50);
+	assert.equal(events[0].seq, 31);
+	assert.equal(events.at(-1).seq, 80);
+	assert.equal(earlier, 30);
+});

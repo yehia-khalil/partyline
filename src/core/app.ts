@@ -27,7 +27,7 @@ export interface Rooms {
 	/** Applies one step to a task and pushes its board line, if the step has one, to the room's streams. */
 	updateTask(team: string, roomId: string, actor: string, number: number, change: TaskChange): Promise<Task>;
 	listTasks(team: string, roomId: string, includeConfirmed: boolean): Promise<Task[]>;
-	getTask(team: string, roomId: string, number: number): Promise<{ task: Task; events: TaskEvent[] }>;
+	getTask(team: string, roomId: string, number: number): Promise<{ task: Task; events: TaskEvent[]; earlier: number }>;
 }
 
 export const DEFAULT_EXPIRY_DAYS = 30;
@@ -123,12 +123,20 @@ function watchInstructions(origin: string, team: string, roomId: string, since: 
 	);
 }
 
+/**
+ * Other agents' text as it appears inside a reply: every line after the first is indented, so a
+ * line break can't start a line that looks like a message, a board line or a task.
+ */
+function untrusted(value: string): string {
+	return value.replace(/\r\n?|[\u2028\u2029]/g, "\n").replace(/\n/g, "\n    ");
+}
+
 function formatMessages(messages: Message[]): string {
 	if (messages.length === 0) {
 		return `${REPLY_MARKER} No new messages.`;
 	}
 
-	const lines = messages.map((m) => `#${m.seq} ${m.at} ${m.sender}: ${m.text}`);
+	const lines = messages.map((m) => `#${m.seq} ${m.at} ${m.sender}: ${untrusted(m.text)}`);
 
 	return `${REPLY_MARKER} ${UNTRUSTED_NOTE}\n\n${lines.join("\n")}\n\nLast seq: ${messages.at(-1)!.seq}`;
 }
@@ -140,7 +148,7 @@ function formatBoard(tasks: Task[], today: string): string {
 	}
 
 	const lines = tasks.map((task) => {
-		const parts = [`#${task.number} [${task.status}] (${task.priority}) ${task.title}`];
+		const parts = [`#${task.number} [${task.status}] (${task.priority}) ${untrusted(task.title)}`];
 		if (task.holder) {
 			parts.push(`holder: ${task.holder}`);
 		}
@@ -150,7 +158,7 @@ function formatBoard(tasks: Task[], today: string): string {
 			parts.push(`due: ${task.due}${overdue ? " (overdue)" : ""}`);
 		}
 		if (task.doneWhen) {
-			parts.push(`done when: ${task.doneWhen}`);
+			parts.push(`done when: ${untrusted(task.doneWhen)}`);
 		}
 
 		return parts.join(" | ");
@@ -160,17 +168,20 @@ function formatBoard(tasks: Task[], today: string): string {
 }
 
 /** One task and every step taken on it, for list_tasks with a task number. */
-function formatTaskHistory(task: Task, events: TaskEvent[], today: string): string {
+function formatTaskHistory(task: Task, events: TaskEvent[], earlier: number, today: string): string {
 	const steps = events.map(
-		(event) => `${event.at} ${event.action} by ${event.actor}${event.detail ? `: ${event.detail}` : ""}`,
+		(event) => `${event.at} ${event.action} by ${event.actor}${event.detail ? `: ${untrusted(event.detail)}` : ""}`,
 	);
+	const older = earlier > 0 ? `(${earlier} earlier step${earlier === 1 ? "" : "s"} not shown)\n` : "";
 
-	return `${formatBoard([task], today)}\n\nHistory:\n${steps.join("\n")}`;
+	return `${formatBoard([task], today)}\n\nHistory:\n${older}${steps.join("\n")}`;
 }
 
 /** True for a real calendar day written as YYYY-MM-DD. */
 function isDay(value: string): boolean {
-	return /^\d{4}-\d{2}-\d{2}$/.test(value) && new Date(`${value}T00:00:00Z`).toISOString().startsWith(value);
+	const time = Date.parse(`${value}T00:00:00Z`);
+
+	return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(time) && new Date(time).toISOString().startsWith(value);
 }
 
 function checkDue(due: string | null | undefined): void {
@@ -346,9 +357,9 @@ This room is closed.`
 			requireGuard(guard);
 			const today = new Date().toISOString().slice(0, 10);
 			if (task !== undefined) {
-				const { task: found, events } = await rooms.getTask(team, room, task);
+				const { task: found, events, earlier } = await rooms.getTask(team, room, task);
 
-				return text(formatTaskHistory(found, events, today));
+				return text(formatTaskHistory(found, events, earlier, today));
 			}
 
 			return text(formatBoard(await rooms.listTasks(team, room, include_confirmed), today));

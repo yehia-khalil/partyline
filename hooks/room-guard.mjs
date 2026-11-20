@@ -3,10 +3,11 @@
  * partyline guard: a Claude Code hook that weighs actions taken while a session is
  * acting on instructions from a partyline room.
  *
- *   PostToolUse  (read_messages) → if the reply is a room's, remember that server as a room
- *                                  server and mark the session as instructed by a room
+ *   PostToolUse  (read_messages, list_tasks) → if the reply is a room's, remember that server
+ *                                  as a room server and mark the session as instructed by a room
  *   UserPromptSubmit             → the operator spoke: clear the mark
- *   PreToolUse   (every tool)    → if marked, apply the action's weight:
+ *   PreToolUse   (every tool)    → tag room reads with the guard's version; a board read marks
+ *                                  the session at once; if marked, apply the action's weight:
  *                                    free    → run as usual
  *                                    notify  → run as usual, tell the operator
  *                                    approve → stop and ask the operator
@@ -105,7 +106,10 @@ const GUARD_WORDS = ["partyline", ".claude", "claude_config_dir", "settings.json
 const marksDir = join(stateDir, "instructed");
 const roomServersFile = join(stateDir, "room-servers.json");
 
-/** A room server's read_messages reply starts with this marker, whatever the server is named locally. */
+/** The tools that return room text: their calls are tagged, and only their replies can mark a session. */
+const ROOM_READ = /^mcp__.+__(read_messages|list_tasks)$/;
+
+/** A room server's read reply starts with this marker, whatever the server is named locally. */
 const REPLY_MARKER = "[partyline]";
 const ROOM_ID = /^[0-9a-f]{32}$/;
 
@@ -697,7 +701,12 @@ switch (input.hook_event_name) {
 	case "PostToolUse": {
 		const room = String(input.tool_input?.room ?? "");
 		const server = serverOf(input.tool_name ?? "");
-		if (!server || !ROOM_ID.test(room) || !replyText(input.tool_response).trimStart().startsWith(REPLY_MARKER)) {
+		if (
+			!server ||
+			!ROOM_READ.test(input.tool_name ?? "") ||
+			!ROOM_ID.test(room) ||
+			!replyText(input.tool_response).trimStart().startsWith(REPLY_MARKER)
+		) {
 			break;
 		}
 
@@ -731,7 +740,7 @@ switch (input.hook_event_name) {
 		// Only reads carrying a real room id, so we never inject an unknown field into another
 		// server's strictly-typed read_messages. Deny never carries the tag: that read won't happen.
 		const tag =
-			/^mcp__.+__read_messages$/.test(toolName) && ROOM_ID.test(String(input.tool_input?.room ?? ""))
+			ROOM_READ.test(toolName) && ROOM_ID.test(String(input.tool_input?.room ?? ""))
 				? { ...input.tool_input, guard: GUARD_VERSION }
 				: null;
 		const tagged = (rest = {}) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput: tag }, ...rest });
@@ -741,6 +750,13 @@ switch (input.hook_event_name) {
 		let guarded;
 		try {
 			if (!isMarked(sessionId)) {
+				if (tag && /__list_tasks$/.test(toolName)) {
+					// A board read marks the session now, not only after its reply: a settings file
+					// whose PostToolUse matcher predates the board would never send the guard that reply.
+					mkdirSync(marksDir, { recursive: true });
+					writeFileSync(markFile(sessionId), JSON.stringify({ room: tag.room, at: new Date().toISOString() }));
+					log({ session: sessionId, event: "instructed", room: tag.room });
+				}
 				if (tag) {
 					respond(tagged());
 				}

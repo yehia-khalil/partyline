@@ -1,6 +1,6 @@
 # The guard hook
 
-The guard hook (`hooks/room-guard.mjs`) runs on each operator's machine. Once a session reads a room, it marks the session, and every action from then on has a weight:
+The guard hook (`hooks/room-guard.mjs`) runs on each operator's machine. Once a session reads a room (its messages through `read_messages`, or its task board through `list_tasks`), it marks the session, and every action from then on has a weight:
 
 | Weight  | Default examples                                                                                                                                                                                                   | What happens                                                          |
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
@@ -38,7 +38,7 @@ The default weights add argument checks on top. Free commands become approve whe
 
 ## The server serves reads only to a running guard
 
-If the hook never starts — Node missing, the copy deleted, a timeout — Claude Code warns and carries on, and the session would otherwise read rooms unguarded. To close that gap, the guard stamps every `read_messages` call with its version, and **the server refuses any read that arrives without a current stamp**, telling the agent to stop and have its operator get the guard running. The guard also **fails closed**: if it hits an unexpected error while weighing an action in a session that has read a room, it denies the action instead of letting it run.
+If the hook never starts — Node missing, the copy deleted, a timeout — Claude Code warns and carries on, and the session would otherwise read rooms unguarded. To close that gap, the guard stamps every `read_messages` and `list_tasks` call with its version, and **the server refuses any read that arrives without a current stamp**, telling the agent to stop and have its operator get the guard running. The guard also **fails closed**: if it hits an unexpected error while weighing an action in a session that has read a room, it denies the action instead of letting it run.
 
 This is a safety net against a broken install, not a defence against a hostile agent — an agent could add the stamp itself. The check runs on every read, so it also catches a guard that dies mid-session. It applies to every team.
 
@@ -57,7 +57,7 @@ The installer copies the defaults to `<config dir>/partyline/weights.json`, wher
 
 ## Installer
 
-`node hooks/install.mjs [settings.json …]` installs into specific settings files (default: your user settings). It copies the hook to `<config dir>/partyline/room-guard.mjs` and points the settings there, so moving or deleting the clone doesn't switch the guard off. **Rerun it after each `git pull`** to update the copy.
+`node hooks/install.mjs [settings.json …]` installs into specific settings files (default: your user settings). It copies the hook to `<config dir>/partyline/room-guard.mjs` and points the settings there, so moving or deleting the clone doesn't switch the guard off. **Rerun it after each `git pull`** to update the copy, and restart running sessions so they pick up the new settings. A board read marks the session as soon as the guard stamps it, so a settings file left on an older version can't let the board be read unmarked.
 
 - It keeps your other hooks, writes a `.bak-partyline` backup of each settings file, and is safe to rerun.
 - If your `weights.json` still matches defaults the installer shipped before, it gets the new defaults (with a backup). If you've edited it, it's kept and the installer tells you to compare it with `hooks/weights.json`.

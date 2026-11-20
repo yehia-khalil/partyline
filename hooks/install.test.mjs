@@ -96,3 +96,10 @@ test("weights: unedited old defaults are updated, edited weights are kept", () =
 	assert.match(install(source, edited), /Kept .*: it has your own edits/);
 	assert.equal(readFileSync(join(edited, "partyline", "weights.json"), "utf8"), mine);
 });
+
+test("the guard sees every MCP tool's reply", () => {
+	const configDir = mkdtempSync(join(tmpdir(), "guard-config-"));
+	install(clone(), configDir);
+	const settings = JSON.parse(readFileSync(join(configDir, "settings.json"), "utf8"));
+	assert.equal(settings.hooks.PostToolUse.at(-1).matcher, "^mcp__.+__.+$");
+});

@@ -15,6 +15,10 @@ function roomsOn(env: Env): Rooms {
 		lastSeq: (team, roomId) => room(env, team, roomId).lastSeq(),
 		close: (team, roomId) => room(env, team, roomId).closeRoom(),
 		isClosed: (team, roomId) => room(env, team, roomId).isClosed(),
+		addTask: (team, roomId, actor, task) => room(env, team, roomId).addTask(actor, task),
+		updateTask: (team, roomId, actor, number, change) => room(env, team, roomId).updateTask(actor, number, change),
+		listTasks: (team, roomId, includeConfirmed) => room(env, team, roomId).listTasks(includeConfirmed),
+		getTask: (team, roomId, number) => room(env, team, roomId).getTask(number),
 	};
 }
 

@@ -236,7 +236,7 @@ function requireGuard(guard: string | undefined): void {
 }
 
 function createServer(rooms: Rooms, { team, name }: Member, teamMembers: string[], origin: string): McpServer {
-	const server = new McpServer({ name: "partyline", version: "0.5.0" });
+	const server = new McpServer({ name: "partyline", version: "0.6.0" });
 
 	server.registerTool(
 		"create_room",

@@ -49,7 +49,7 @@ const TIERS = ["free", "notify", "approve"];
  * the release commit bumps it. The server refuses reads stamped below its own minimum, which
  * rises only on a release that fixes a guard bypass.
  */
-const GUARD_VERSION = "0.5.0";
+const GUARD_VERSION = "0.6.0";
 
 /**
  * UserPromptSubmit also fires for turns no human started: background task and Monitor

@@ -33,16 +33,18 @@ const dataDir = mkdtempSync(join(tmpdir(), "partyline-"));
 let base = remote;
 let server;
 
-async function startNode(port) {
+const TEAMS = {
+	core: { "alice-claude": TOKEN_A, "bob-claude": TOKEN_A2 },
+	other: { "carol-claude": TOKEN_B },
+};
+
+async function startNode(port, teams = TEAMS) {
 	server = spawn(process.execPath, NODE_ARGS, {
 		env: {
 			...process.env,
 			PORT: String(port),
 			DATA_DIR: dataDir,
-			TEAMS: JSON.stringify({
-				core: { "alice-claude": TOKEN_A, "bob-claude": TOKEN_A2 },
-				other: { "carol-claude": TOKEN_B },
-			}),
+			TEAMS: JSON.stringify(teams),
 		},
 		stdio: ["ignore", "pipe", "inherit"],
 	});
@@ -470,4 +472,29 @@ test("the Node server deletes rooms idle longer than ROOM_EXPIRY_DAYS", { skip: 
 
 	assert.equal(await call(TOKEN_A, "read_messages", { room: idle, guard: GUARD }), "No such room.");
 	assert.match(await call(TOKEN_A, "read_messages", { room: active, guard: GUARD }), /fresh/);
+});
+
+test("the creator can reclaim a task once its holder has left the team", { skip: Boolean(remote) }, async () => {
+	const { roomId } = await createRoom();
+	await call(TOKEN_A, "add_task", { room: roomId, title: "ours" });
+	await call(TOKEN_A2, "update_task", { room: roomId, task: 1, action: "claim" });
+	assert.match(
+		await call(TOKEN_A, "update_task", { room: roomId, task: 1, action: "reclaim" }),
+		/bob-claude is still on the team/,
+	);
+
+	// bob-claude leaves the team.
+	await stopNode();
+	base = await startNode(18790, { core: { "alice-claude": TOKEN_A }, other: TEAMS.other });
+
+	assert.equal(
+		await call(TOKEN_A, "update_task", { room: roomId, task: 1, action: "reclaim" }),
+		"Reclaimed task #1. It is open again.",
+	);
+	const boardView = await call(TOKEN_A, "list_tasks", { room: roomId, guard: GUARD });
+	assert.match(boardView, /#1 \[open\]/);
+	assert.doesNotMatch(boardView, /holder:/);
+
+	await stopNode();
+	base = await startNode(18791);
 });

@@ -42,6 +42,8 @@ export type TaskChange =
 	| { action: "confirm" }
 	| { action: "hand_off"; to: string }
 	| { action: "send_back"; reason: string }
+	/** members: the team as it is now; reclaim is refused while the holder is still one of them. */
+	| { action: "reclaim"; members: string[] }
 	| { action: "edit"; priority?: Priority; due?: string | null };
 
 const TASK_COLUMNS = `number, title, done_when AS doneWhen, priority, due, created_by AS createdBy, holder, status,
@@ -317,6 +319,22 @@ export class RoomLog {
 				next = { status: "claimed", holder: task.holder };
 				line = `task #${number} sent back to ${task.holder} by ${actor}`;
 				detail = change.reason;
+				break;
+			case "reclaim":
+				if (task.status !== "claimed") {
+					throw new RoomError(`Task #${number} is ${task.status}, not claimed.`);
+				}
+				if (task.createdBy !== actor) {
+					throw new RoomError(`Only the creator of task #${number} (${task.createdBy}) can do that.`);
+				}
+				if (task.holder !== null && change.members.includes(task.holder)) {
+					throw new RoomError(
+						`${task.holder} is still on the team: only they can release or hand off task #${number}.`,
+					);
+				}
+				next = { status: "open", holder: null };
+				line = `task #${number} reclaimed by ${actor} from ${task.holder}`;
+				detail = task.holder;
 				break;
 			case "edit":
 				if (task.status === "confirmed") {

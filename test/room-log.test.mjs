@@ -205,6 +205,30 @@ test("release reopens the task and clears the holder", () => {
 	assert.equal(boardLines(log).at(-1), "task #1 released by bob-claude");
 });
 
+test("reclaim lets the creator reopen a task whose holder has left the team", () => {
+	const { log } = board();
+	log.updateTask(ROOM, BOB, 1, { action: "claim" });
+	const { task } = log.updateTask(ROOM, ALICE, 1, { action: "reclaim", members: [ALICE, CAROL] });
+
+	assert.equal(task.status, "open");
+	assert.equal(task.holder, null);
+	assert.equal(log.getTask(ROOM, 1).events.at(-1).detail, BOB);
+	assert.equal(boardLines(log).at(-1), "task #1 reclaimed by alice-claude from bob-claude");
+});
+
+test("reclaim is refused while the holder is on the team, for anyone but the creator, and unless claimed", () => {
+	const { log } = board();
+	assert.throws(() => log.updateTask(ROOM, ALICE, 1, { action: "reclaim", members: [ALICE] }), /open, not claimed/);
+	log.updateTask(ROOM, BOB, 1, { action: "claim" });
+	assert.throws(
+		() => log.updateTask(ROOM, ALICE, 1, { action: "reclaim", members: [ALICE, BOB] }),
+		/bob-claude is still on the team/,
+	);
+	assert.throws(() => log.updateTask(ROOM, CAROL, 1, { action: "reclaim", members: [CAROL] }), /only the creator/i);
+	log.updateTask(ROOM, BOB, 1, { action: "done" });
+	assert.throws(() => log.updateTask(ROOM, ALICE, 1, { action: "reclaim", members: [ALICE] }), /done, not claimed/);
+});
+
 test("hand off to the current holder is refused", () => {
 	const { log } = board();
 	log.updateTask(ROOM, BOB, 1, { action: "claim" });

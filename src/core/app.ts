@@ -392,11 +392,12 @@ This room is closed.`
 		{
 			description:
 				"Take a step on a task: claim (an open task), release or hand_off (to: a team member) or done (as its holder), " +
-				"confirm or send_back (with a reason, as its creator), or edit its priority and due date (creator or holder).",
+				"confirm or send_back (with a reason, as its creator), reclaim (as its creator, once its holder has left the team), " +
+				"or edit its priority and due date (creator or holder).",
 			inputSchema: z.object({
 				room: roomIdSchema,
 				task: z.number().int().min(1),
-				action: z.enum(["claim", "release", "hand_off", "done", "confirm", "send_back", "edit"]),
+				action: z.enum(["claim", "release", "hand_off", "done", "confirm", "send_back", "reclaim", "edit"]),
 				to: z.string().regex(MEMBER_NAME, "to is a member name.").optional(),
 				reason: z.string().min(1).max(1000).optional(),
 				priority: prioritySchema.optional(),
@@ -421,6 +422,9 @@ This room is closed.`
 					}
 					change = { action, reason };
 					break;
+				case "reclaim":
+					change = { action, members: teamMembers };
+					break;
 				case "edit":
 					if (priority === undefined && due === undefined) {
 						throw new RoomError("edit needs a priority or a due date.");
@@ -439,6 +443,7 @@ This room is closed.`
 				done: `Marked task #${task} done.`,
 				confirm: `Confirmed task #${task}.`,
 				send_back: `Sent task #${task} back to ${updated.holder}.`,
+				reclaim: `Reclaimed task #${task}. It is open again.`,
 				edit: `Updated task #${task}.`,
 			};
 

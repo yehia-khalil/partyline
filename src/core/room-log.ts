@@ -39,12 +39,16 @@ export type TaskChange =
 	| { action: "claim" }
 	| { action: "release" }
 	| { action: "done" }
-	| { action: "confirm" }
+	/**
+	 * members: the team as it is now. The creator's steps (confirm, send_back, reclaim, edit) are open
+	 * to every member once the creator is no longer one of them, and reclaim is refused while the
+	 * holder still is.
+	 */
+	| { action: "confirm"; members: string[] }
 	| { action: "hand_off"; to: string }
-	| { action: "send_back"; reason: string }
-	/** members: the team as it is now; reclaim is refused while the holder is still one of them. */
+	| { action: "send_back"; reason: string; members: string[] }
 	| { action: "reclaim"; members: string[] }
-	| { action: "edit"; priority?: Priority; due?: string | null };
+	| { action: "edit"; priority?: Priority; due?: string | null; members: string[] };
 
 const TASK_COLUMNS = `number, title, done_when AS doneWhen, priority, due, created_by AS createdBy, holder, status,
 	created_at AS createdAt, updated_at AS updatedAt`;
@@ -267,10 +271,15 @@ export class RoomLog {
 				throw new RoomError(`Only the holder of task #${number} (${task.holder}) can do that.`);
 			}
 		};
-		const creatorOnDone = () => {
-			if (task.createdBy !== actor) {
+		// The creator's steps pass to the whole team once the creator has left it.
+		const actsAsCreator = (members: string[]) => actor === task.createdBy || !members.includes(task.createdBy);
+		const creatorOnly = (members: string[]) => {
+			if (!actsAsCreator(members)) {
 				throw new RoomError(`Only the creator of task #${number} (${task.createdBy}) can do that.`);
 			}
+		};
+		const creatorOnDone = (members: string[]) => {
+			creatorOnly(members);
 			if (task.status !== "done") {
 				throw new RoomError(`Task #${number} is not marked done yet.`);
 			}
@@ -310,12 +319,12 @@ export class RoomLog {
 				line = `task #${number} marked done by ${actor}`;
 				break;
 			case "confirm":
-				creatorOnDone();
+				creatorOnDone(change.members);
 				next = { status: "confirmed", holder: task.holder };
 				line = `task #${number} confirmed by ${actor}`;
 				break;
 			case "send_back":
-				creatorOnDone();
+				creatorOnDone(change.members);
 				next = { status: "claimed", holder: task.holder };
 				line = `task #${number} sent back to ${task.holder} by ${actor}`;
 				detail = change.reason;
@@ -324,9 +333,7 @@ export class RoomLog {
 				if (task.status !== "claimed") {
 					throw new RoomError(`Task #${number} is ${task.status}, not claimed.`);
 				}
-				if (task.createdBy !== actor) {
-					throw new RoomError(`Only the creator of task #${number} (${task.createdBy}) can do that.`);
-				}
+				creatorOnly(change.members);
 				if (task.holder !== null && change.members.includes(task.holder)) {
 					throw new RoomError(
 						`${task.holder} is still on the team: only they can release or hand off task #${number}.`,
@@ -340,7 +347,7 @@ export class RoomLog {
 				if (task.status === "confirmed") {
 					throw new RoomError(`Task #${number} is confirmed and can no longer be changed.`);
 				}
-				if (actor !== task.createdBy && actor !== task.holder) {
+				if (actor !== task.holder && !actsAsCreator(change.members)) {
 					throw new RoomError(`Only the creator or the holder of task #${number} can change it.`);
 				}
 				next = { status: task.status, holder: task.holder };

@@ -117,6 +117,7 @@ test("a database from an older version gets the closed_at column", () => {
 const ALICE = "alice-claude";
 const BOB = "bob-claude";
 const CAROL = "carol-claude";
+const TEAM = [ALICE, BOB, CAROL];
 
 /** A room with one task added by alice. */
 function board(extra = {}) {
@@ -138,7 +139,7 @@ test("the full hand-off: add, claim, hand off, done, confirm", () => {
 	log.updateTask(ROOM, BOB, 1, { action: "claim" });
 	log.updateTask(ROOM, BOB, 1, { action: "hand_off", to: CAROL });
 	log.updateTask(ROOM, CAROL, 1, { action: "done" });
-	const { task } = log.updateTask(ROOM, ALICE, 1, { action: "confirm" });
+	const { task } = log.updateTask(ROOM, ALICE, 1, { action: "confirm", members: TEAM });
 
 	assert.equal(task.status, "confirmed");
 	assert.equal(task.holder, CAROL);
@@ -164,8 +165,11 @@ test("only the holder can release, hand off or mark done; only the creator can c
 	assert.throws(() => log.updateTask(ROOM, CAROL, 1, { action: "hand_off", to: CAROL }), /only the holder/i);
 	assert.throws(() => log.updateTask(ROOM, ALICE, 1, { action: "done" }), /only the holder/i);
 	log.updateTask(ROOM, BOB, 1, { action: "done" });
-	assert.throws(() => log.updateTask(ROOM, BOB, 1, { action: "confirm" }), /only the creator/i);
-	assert.throws(() => log.updateTask(ROOM, BOB, 1, { action: "send_back", reason: "x" }), /only the creator/i);
+	assert.throws(() => log.updateTask(ROOM, BOB, 1, { action: "confirm", members: TEAM }), /only the creator/i);
+	assert.throws(
+		() => log.updateTask(ROOM, BOB, 1, { action: "send_back", reason: "x", members: TEAM }),
+		/only the creator/i,
+	);
 });
 
 test("steps only happen from the right status", () => {
@@ -173,7 +177,7 @@ test("steps only happen from the right status", () => {
 	assert.throws(() => log.updateTask(ROOM, ALICE, 1, { action: "done" }), /open/);
 	log.updateTask(ROOM, BOB, 1, { action: "claim" });
 	assert.throws(() => log.updateTask(ROOM, CAROL, 1, { action: "claim" }), /already claimed by bob-claude/);
-	assert.throws(() => log.updateTask(ROOM, ALICE, 1, { action: "confirm" }), /not marked done/i);
+	assert.throws(() => log.updateTask(ROOM, ALICE, 1, { action: "confirm", members: TEAM }), /not marked done/i);
 	assert.throws(() => log.updateTask(ROOM, ALICE, 2, { action: "claim" }), /No task #2/);
 });
 
@@ -181,14 +185,14 @@ test("the creator may confirm work they did themselves", () => {
 	const { log } = board();
 	log.updateTask(ROOM, ALICE, 1, { action: "claim" });
 	log.updateTask(ROOM, ALICE, 1, { action: "done" });
-	assert.equal(log.updateTask(ROOM, ALICE, 1, { action: "confirm" }).task.status, "confirmed");
+	assert.equal(log.updateTask(ROOM, ALICE, 1, { action: "confirm", members: TEAM }).task.status, "confirmed");
 });
 
 test("send back returns the task to its holder", () => {
 	const { log } = board();
 	log.updateTask(ROOM, BOB, 1, { action: "claim" });
 	log.updateTask(ROOM, BOB, 1, { action: "done" });
-	const { task } = log.updateTask(ROOM, ALICE, 1, { action: "send_back", reason: "tests fail" });
+	const { task } = log.updateTask(ROOM, ALICE, 1, { action: "send_back", reason: "tests fail", members: TEAM });
 
 	assert.equal(task.status, "claimed");
 	assert.equal(task.holder, BOB);
@@ -224,9 +228,46 @@ test("reclaim is refused while the holder is on the team, for anyone but the cre
 		() => log.updateTask(ROOM, ALICE, 1, { action: "reclaim", members: [ALICE, BOB] }),
 		/bob-claude is still on the team/,
 	);
-	assert.throws(() => log.updateTask(ROOM, CAROL, 1, { action: "reclaim", members: [CAROL] }), /only the creator/i);
+	assert.throws(
+		() => log.updateTask(ROOM, CAROL, 1, { action: "reclaim", members: [ALICE, CAROL] }),
+		/only the creator/i,
+	);
 	log.updateTask(ROOM, BOB, 1, { action: "done" });
 	assert.throws(() => log.updateTask(ROOM, ALICE, 1, { action: "reclaim", members: [ALICE] }), /done, not claimed/);
+});
+
+test("once the creator has left, any member can reclaim, even when the holder has left too", () => {
+	const { log } = board();
+	log.updateTask(ROOM, BOB, 1, { action: "claim" });
+	assert.throws(
+		() => log.updateTask(ROOM, CAROL, 1, { action: "reclaim", members: [ALICE, CAROL] }),
+		/only the creator of task #1 \(alice-claude\)/i,
+	);
+
+	const { task } = log.updateTask(ROOM, CAROL, 1, { action: "reclaim", members: [CAROL] });
+	assert.equal(task.status, "open");
+	assert.equal(boardLines(log).at(-1), "task #1 reclaimed by carol-claude from bob-claude");
+});
+
+test("once the creator has left, any member can confirm, send back and edit", () => {
+	const { log } = board();
+	const members = [BOB, CAROL];
+	log.updateTask(ROOM, BOB, 1, { action: "claim" });
+	log.updateTask(ROOM, BOB, 1, { action: "done" });
+	assert.throws(() => log.updateTask(ROOM, CAROL, 1, { action: "confirm", members: TEAM }), /only the creator/i);
+	assert.throws(
+		() => log.updateTask(ROOM, CAROL, 1, { action: "edit", priority: "high", members: TEAM }),
+		/creator or the holder/i,
+	);
+
+	const sent = log.updateTask(ROOM, CAROL, 1, { action: "send_back", reason: "tests fail", members });
+	assert.equal(sent.task.status, "claimed");
+	assert.equal(boardLines(log).at(-1), "task #1 sent back to bob-claude by carol-claude");
+	assert.equal(log.updateTask(ROOM, CAROL, 1, { action: "edit", priority: "high", members }).task.priority, "high");
+
+	log.updateTask(ROOM, BOB, 1, { action: "done" });
+	assert.equal(log.updateTask(ROOM, CAROL, 1, { action: "confirm", members }).task.status, "confirmed");
+	assert.equal(boardLines(log).at(-1), "task #1 confirmed by carol-claude");
 });
 
 test("hand off to the current holder is refused", () => {
@@ -238,19 +279,27 @@ test("hand off to the current holder is refused", () => {
 test("edit changes priority and due, posts nothing, and is refused once confirmed", () => {
 	const { log } = board();
 	const before = boardLines(log).length;
-	const { task, message } = log.updateTask(ROOM, ALICE, 1, { action: "edit", priority: "high", due: "2099-01-01" });
+	const { task, message } = log.updateTask(ROOM, ALICE, 1, {
+		action: "edit",
+		priority: "high",
+		due: "2099-01-01",
+		members: TEAM,
+	});
 	assert.equal(message, null);
 	assert.equal(task.priority, "high");
 	assert.equal(task.due, "2099-01-01");
 	assert.equal(boardLines(log).length, before);
-	assert.equal(log.updateTask(ROOM, ALICE, 1, { action: "edit", due: null }).task.due, null);
-	assert.throws(() => log.updateTask(ROOM, BOB, 1, { action: "edit", priority: "low" }), /creator or the holder/i);
+	assert.equal(log.updateTask(ROOM, ALICE, 1, { action: "edit", due: null, members: TEAM }).task.due, null);
+	assert.throws(
+		() => log.updateTask(ROOM, BOB, 1, { action: "edit", priority: "low", members: TEAM }),
+		/creator or the holder/i,
+	);
 
 	log.updateTask(ROOM, BOB, 1, { action: "claim" });
-	assert.equal(log.updateTask(ROOM, BOB, 1, { action: "edit", priority: "low" }).task.priority, "low");
+	assert.equal(log.updateTask(ROOM, BOB, 1, { action: "edit", priority: "low", members: TEAM }).task.priority, "low");
 	log.updateTask(ROOM, BOB, 1, { action: "done" });
-	log.updateTask(ROOM, ALICE, 1, { action: "confirm" });
-	assert.throws(() => log.updateTask(ROOM, ALICE, 1, { action: "edit", priority: "high" }), /confirmed/);
+	log.updateTask(ROOM, ALICE, 1, { action: "confirm", members: TEAM });
+	assert.throws(() => log.updateTask(ROOM, ALICE, 1, { action: "edit", priority: "high", members: TEAM }), /confirmed/);
 });
 
 test("a closed room's board is read-only", () => {
@@ -296,7 +345,7 @@ test("listTasks orders by status, then priority, then number, and hides confirme
 	log.updateTask(ROOM, BOB, 4, { action: "claim" });
 	log.updateTask(ROOM, BOB, 1, { action: "claim" });
 	log.updateTask(ROOM, BOB, 1, { action: "done" });
-	log.updateTask(ROOM, ALICE, 1, { action: "confirm" });
+	log.updateTask(ROOM, ALICE, 1, { action: "confirm", members: TEAM });
 
 	assert.deepEqual(
 		log.listTasks(ROOM, false).map((t) => t.number),
@@ -326,9 +375,12 @@ test("deleting a room removes its tasks and history", () => {
 test("edits count toward the room's rate limit", () => {
 	const { log } = board();
 	for (let i = 0; i < 29; i++) {
-		log.updateTask(ROOM, ALICE, 1, { action: "edit", priority: i % 2 ? "high" : "low" });
+		log.updateTask(ROOM, ALICE, 1, { action: "edit", priority: i % 2 ? "high" : "low", members: TEAM });
 	}
-	assert.throws(() => log.updateTask(ROOM, ALICE, 1, { action: "edit", priority: "normal" }), /Room limit/);
+	assert.throws(
+		() => log.updateTask(ROOM, ALICE, 1, { action: "edit", priority: "normal", members: TEAM }),
+		/Room limit/,
+	);
 	assert.throws(() => log.post(ROOM, BOB, "and messages too"), /Room limit/);
 });
 

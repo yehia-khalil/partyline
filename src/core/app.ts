@@ -393,7 +393,7 @@ This room is closed.`
 			description:
 				"Take a step on a task: claim (an open task), release or hand_off (to: a team member) or done (as its holder), " +
 				"confirm or send_back (with a reason, as its creator), reclaim (as its creator, once its holder has left the team), " +
-				"or edit its priority and due date (creator or holder).",
+				"or edit its priority and due date (creator or holder). Once the creator has left the team, any member can take the creator's steps.",
 			inputSchema: z.object({
 				room: roomIdSchema,
 				task: z.number().int().min(1),
@@ -420,8 +420,9 @@ This room is closed.`
 					if (!reason) {
 						throw new RoomError("send_back needs a reason.");
 					}
-					change = { action, reason };
+					change = { action, reason, members: teamMembers };
 					break;
+				case "confirm":
 				case "reclaim":
 					change = { action, members: teamMembers };
 					break;
@@ -430,7 +431,7 @@ This room is closed.`
 						throw new RoomError("edit needs a priority or a due date.");
 					}
 					checkDue(due);
-					change = { action, priority: priority as Priority | undefined, due };
+					change = { action, priority: priority as Priority | undefined, due, members: teamMembers };
 					break;
 				default:
 					change = { action };

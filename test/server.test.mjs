@@ -498,3 +498,33 @@ test("the creator can reclaim a task once its holder has left the team", { skip:
 	await stopNode();
 	base = await startNode(18791);
 });
+
+test(
+	"any member can take the creator's steps once the creator has left the team",
+	{ skip: Boolean(remote) },
+	async () => {
+		const { roomId } = await createRoom();
+		await call(TOKEN_A, "add_task", { room: roomId, title: "ours" });
+		await call(TOKEN_A2, "update_task", { room: roomId, task: 1, action: "claim" });
+		assert.match(
+			await call(TOKEN_A2, "update_task", { room: roomId, task: 1, action: "reclaim" }),
+			/Only the creator of task #1 \(alice-claude\)/,
+		);
+
+		// alice-claude, the creator, and bob-claude, the holder, both leave; dave-claude joins.
+		await stopNode();
+		base = await startNode(18792, { core: { "dave-claude": "d".repeat(64) }, other: TEAMS.other });
+
+		assert.equal(
+			await call("d".repeat(64), "update_task", { room: roomId, task: 1, action: "reclaim" }),
+			"Reclaimed task #1. It is open again.",
+		);
+		assert.match(
+			await call("d".repeat(64), "read_messages", { room: roomId, guard: GUARD }),
+			/task #1 reclaimed by dave-claude from bob-claude/,
+		);
+
+		await stopNode();
+		base = await startNode(18793);
+	},
+);

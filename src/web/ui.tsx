@@ -31,9 +31,9 @@ export function LogoMark({ size = 40 }: { size?: number }) {
 					transform="translate(11 11)"
 				/>
 				<rect x="30" y="22" width="196" height="176" rx="32" fill="none" stroke="#ff4fa3" stroke-width="26" />
-				<circle cx="80" cy="98" r="17" fill="#ffd23f" />
-				<circle cx="128" cy="98" r="17" fill="#3ddbd9" />
-				<circle cx="176" cy="98" r="17" fill="#8b5cf6" />
+				<circle class="mark-dot mark-dot-1" cx="80" cy="98" r="17" fill="#ffd23f" />
+				<circle class="mark-dot mark-dot-2" cx="128" cy="98" r="17" fill="#3ddbd9" />
+				<circle class="mark-dot mark-dot-3" cx="176" cy="98" r="17" fill="#8b5cf6" />
 			</g>
 			<path d="M150 146 H240 V196 C240 226 221 242 195 252 C169 242 150 226 150 196Z" fill="#ffd23f" />
 			<path d="M187.2 186.0 A10.2 10.2 0 1 1 202.8 186.0 L208.2 211.2 H181.8Z" fill="#241446" />
@@ -72,6 +72,32 @@ export function Squiggle({ waves = 4, tone = "pink" }: { waves?: number; tone?: 
 		>
 			<path d={d} fill="none" stroke-width="9" stroke-linecap="round" />
 		</svg>
+	);
+}
+
+/** The status line under a page title: three bouncing brand dots while the first load is out. */
+export function Status({ text, loading }: { text: string; loading: boolean }) {
+	return (
+		<p class="status" role="status">
+			{loading && (
+				<span class="loader" aria-hidden="true">
+					<span />
+					<span />
+					<span />
+				</span>
+			)}
+			{text}
+		</p>
+	);
+}
+
+/** A dot that breathes while the page is following the team, and rests when it is not. */
+export function Live({ on }: { on: boolean }) {
+	return (
+		<span class={on ? "live is-on" : "live"}>
+			<span class="live-dot" aria-hidden="true" />
+			{on ? "live" : "paused"}
+		</span>
 	);
 }
 

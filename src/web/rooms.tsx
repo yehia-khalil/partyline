@@ -2,7 +2,7 @@
 import { useState } from "preact/hooks";
 import { api, type RoomSummary, roomsPath, type TaskCounts, type Viewer } from "./api.ts";
 import { usePolling } from "./poll.ts";
-import { Badge, plural, Squiggle, Time } from "./ui.tsx";
+import { Badge, Live, plural, Squiggle, Status, Time } from "./ui.tsx";
 
 const COLUMNS = ["open", "claimed", "done", "confirmed"] as const;
 
@@ -55,7 +55,7 @@ function RoomCard({ room }: { room: RoomSummary }) {
 
 export function RoomsView({ viewer, onRefused }: { viewer: Viewer; onRefused: () => void }) {
 	const [rooms, setRooms] = useState<RoomSummary[] | null>(null);
-	const status = usePolling(
+	const { status, loading, live } = usePolling(
 		async () => setRooms((await api<{ rooms: RoomSummary[] }>(viewer, roomsPath(viewer))).rooms),
 		onRefused,
 		"This team has no rooms here.",
@@ -66,10 +66,9 @@ export function RoomsView({ viewer, onRefused }: { viewer: Viewer; onRefused: ()
 			<div class="page-head">
 				<h1 class="page-title">Rooms</h1>
 				<Squiggle waves={3} tone="pink" />
+				{!loading && <Live on={live} />}
 			</div>
-			<p class="status" role="status">
-				{status}
-			</p>
+			<Status text={status} loading={loading} />
 			{rooms && rooms.length === 0 ? (
 				<div class="frame empty-state">
 					<div class="dots" aria-hidden="true" />

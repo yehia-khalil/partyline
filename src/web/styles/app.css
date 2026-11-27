@@ -20,6 +20,9 @@ body {
 	background-size: 24px 24px;
 	font: var(--text-body) / 1.5 var(--font-body);
 	-webkit-font-smoothing: antialiased;
+	/* Its own stacking context, so the twinkle layers (Motion, below) sit between the dot grid and the content. */
+	position: relative;
+	isolation: isolate;
 }
 
 h1,
@@ -121,9 +124,15 @@ code,
 	border-radius: var(--radius-pill);
 	padding: var(--space-2) var(--space-5);
 	border: var(--border-card) solid transparent;
+	/* Released buttons spring back with a little overshoot; presses squish at once (see :active). */
 	transition:
-		transform 80ms ease,
-		box-shadow 80ms ease;
+		transform var(--motion-fast) var(--ease-bounce),
+		box-shadow var(--motion-fast) var(--ease-out),
+		border-color var(--motion-fast) ease;
+}
+
+.button:active:not(:disabled) {
+	transition-duration: var(--motion-press);
 }
 
 .button:disabled {
@@ -146,7 +155,7 @@ code,
 }
 
 .button-primary:active:not(:disabled) {
-	transform: translate(3px, 3px);
+	transform: translate(3px, 3px) scale(1.03, 0.92);
 	box-shadow: 1px 1px 0 var(--shadow-colour);
 }
 
@@ -158,6 +167,11 @@ code,
 
 .button-ghost:hover:not(:disabled) {
 	border-color: var(--pl-teal);
+	transform: translateY(-1px);
+}
+
+.button-ghost:active:not(:disabled) {
+	transform: scale(1.04, 0.9);
 }
 
 .field {
@@ -400,11 +414,6 @@ code,
 	display: grid;
 	gap: var(--space-3);
 	padding: var(--space-5);
-	transition: transform 100ms ease;
-}
-
-.room-card:hover {
-	transform: translate(-2px, -2px);
 }
 
 .room-card.is-closed {
@@ -859,8 +868,389 @@ code,
 	}
 }
 
+/* ---- Motion --------------------------------------------------------------------------------- *
+ * Transform and opacity only, so phones stay smooth. Timings live in tokens.css. Entrances run
+ * once when an element mounts; a poll that changes nothing mounts nothing, so nothing moves.
+ * motion.ts adds the board glide, the confetti and the sign-in shake. */
+
+@keyframes drop-in {
+	0% {
+		opacity: 0;
+		transform: translateY(-48px) rotate(-2deg);
+	}
+	40% {
+		opacity: 1;
+	}
+	100% {
+		transform: none;
+	}
+}
+
+@keyframes rise-in {
+	0% {
+		opacity: 0;
+		transform: translateY(18px) scale(0.97);
+	}
+	45% {
+		opacity: 1;
+	}
+	100% {
+		transform: none;
+	}
+}
+
+@keyframes pop-in {
+	0% {
+		opacity: 0;
+		transform: translateX(-14px) scale(0.92);
+	}
+	40% {
+		opacity: 1;
+	}
+	100% {
+		transform: none;
+	}
+}
+
+@keyframes fade-in {
+	from {
+		opacity: 0;
+	}
+}
+
+@keyframes wave {
+	from {
+		transform: scaleY(1);
+	}
+	to {
+		transform: scaleY(0.55) translateX(3%);
+	}
+}
+
+@keyframes bob {
+	0%,
+	24%,
+	100% {
+		transform: none;
+	}
+	10% {
+		transform: translateY(-34%);
+	}
+}
+
+@keyframes twinkle {
+	0%,
+	100% {
+		opacity: 0;
+	}
+	50% {
+		opacity: 1;
+	}
+}
+
+@keyframes pulse {
+	0%,
+	100% {
+		transform: none;
+	}
+	50% {
+		transform: scale(1.07);
+	}
+}
+
+@keyframes breathe {
+	0%,
+	100% {
+		transform: scale(0.8);
+		opacity: 0.75;
+	}
+	50% {
+		transform: scale(1.1);
+		opacity: 1;
+	}
+}
+
+@keyframes ping {
+	0% {
+		transform: scale(1);
+		opacity: 0.7;
+	}
+	100% {
+		transform: scale(2.6);
+		opacity: 0;
+	}
+}
+
+@keyframes hop {
+	0%,
+	60%,
+	100% {
+		transform: none;
+	}
+	30% {
+		transform: translateY(-6px);
+	}
+}
+
+/* Entrances */
+
+.sign-in {
+	animation: drop-in var(--motion-entrance) var(--ease-drop) backwards;
+}
+
+.room-card,
+.empty-state {
+	animation: rise-in var(--motion-entrance) var(--ease-bounce) backwards;
+}
+
+.room-card:nth-child(2) {
+	animation-delay: calc(var(--motion-stagger) * 1);
+}
+.room-card:nth-child(3) {
+	animation-delay: calc(var(--motion-stagger) * 2);
+}
+.room-card:nth-child(4) {
+	animation-delay: calc(var(--motion-stagger) * 3);
+}
+.room-card:nth-child(5) {
+	animation-delay: calc(var(--motion-stagger) * 4);
+}
+.room-card:nth-child(6) {
+	animation-delay: calc(var(--motion-stagger) * 5);
+}
+.room-card:nth-child(n + 7) {
+	animation-delay: calc(var(--motion-stagger) * 6);
+}
+
+.message.is-new {
+	animation: pop-in var(--motion-entrance) var(--ease-bounce) backwards;
+	transform-origin: left center;
+}
+
+/* Ambient: slow, small, behind the content */
+
+.squiggle path {
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: wave var(--motion-wave) var(--ease-in-out) infinite alternate;
+}
+
+.squiggle-teal path {
+	animation-delay: calc(var(--motion-wave) / -3);
+}
+
+.squiggle-yellow path {
+	animation-delay: calc(var(--motion-wave) / -1.5);
+}
+
+.logo-mark .mark-dot {
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: bob var(--motion-bob) var(--ease-in-out) infinite;
+}
+
+.logo-mark .mark-dot-2 {
+	animation-delay: calc(var(--motion-bob) * 0.08);
+}
+
+.logo-mark .mark-dot-3 {
+	animation-delay: calc(var(--motion-bob) * 0.16);
+}
+
+/* Two sparse grids of brighter dots on the same 24px lattice as the body's, fading in and out of step. */
+body::before,
+body::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	pointer-events: none;
+	opacity: 0;
+	animation: twinkle var(--motion-twinkle) var(--ease-in-out) infinite;
+}
+
+body::before {
+	background-image: radial-gradient(circle at 12px 12px, var(--dot) 2px, transparent 2.4px);
+	background-size: 72px 48px;
+}
+
+body::after {
+	background-image: radial-gradient(circle at 60px 36px, var(--dot) 2px, transparent 2.4px);
+	background-size: 96px 72px;
+	animation-delay: calc(var(--motion-twinkle) / -2);
+}
+
+.badge-overdue,
+.count-overdue {
+	animation: pulse var(--motion-pulse) var(--ease-in-out) infinite;
+}
+
+/* Live: a dot that breathes while polling is on */
+
+.live {
+	margin-left: auto;
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	font-size: var(--text-small);
+	font-weight: 800;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	color: var(--text-muted);
+}
+
+.live-dot {
+	position: relative;
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	background: var(--frame-quiet);
+}
+
+.live.is-on .live-dot {
+	background: var(--pl-teal);
+	animation: breathe var(--motion-breathe) var(--ease-in-out) infinite;
+}
+
+.live.is-on .live-dot::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	border-radius: 50%;
+	background: var(--pl-teal);
+	animation: ping var(--motion-breathe) var(--ease-out) infinite;
+}
+
+/* Loading: the logo's three dots hop in turn */
+
+.loader {
+	display: inline-flex;
+	gap: 5px;
+	margin-right: var(--space-2);
+	vertical-align: middle;
+}
+
+.loader span {
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+	animation: hop 0.9s var(--ease-in-out) infinite;
+}
+
+.loader span:nth-child(1) {
+	background: var(--pl-yellow);
+}
+
+.loader span:nth-child(2) {
+	background: var(--pl-teal);
+	animation-delay: 0.12s;
+}
+
+.loader span:nth-child(3) {
+	background: var(--pl-violet);
+	animation-delay: 0.24s;
+}
+
+/* Hover: cards lift and the violet offset shadow grows. Only where there is a real pointer. */
+
+.room-card,
+.task {
+	transition:
+		transform var(--motion-base) var(--ease-bounce),
+		box-shadow var(--motion-base) var(--ease-out);
+}
+
+@media (hover: hover) {
+	.room-card:hover {
+		transform: translate(-4px, -4px);
+		box-shadow: 12px 12px 0 var(--shadow-colour);
+	}
+
+	.room-card.is-closed:hover {
+		box-shadow: none;
+	}
+
+	.task:hover {
+		transform: translate(-2px, -2px);
+		box-shadow: 4px 4px 0 var(--shadow-colour);
+	}
+
+	.task.is-overdue:hover {
+		box-shadow: 7px 7px 0 var(--shadow-colour);
+	}
+}
+
+.room-card:active {
+	transform: translate(1px, 1px) scale(0.99);
+	transition-duration: var(--motion-press);
+}
+
+/* Confetti, placed by motion.ts at a confirmed task */
+
+.confetti {
+	position: fixed;
+	inset: 0;
+	z-index: 10;
+	pointer-events: none;
+	overflow: hidden;
+}
+
+.confetti-piece {
+	position: absolute;
+	left: -5px;
+	top: -4px;
+	width: 10px;
+	height: 7px;
+	border-radius: 2px;
+}
+
+.confetti-piece.is-sparkle {
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+}
+
+.confetti-pink {
+	background: var(--pl-pink);
+}
+
+.confetti-yellow {
+	background: var(--pl-yellow);
+}
+
+.confetti-teal {
+	background: var(--pl-teal);
+}
+
+.confetti-violet {
+	background: var(--pl-violet);
+}
+
+/* Reduced motion: every loop stops, transitions are instant, entrances become short fades. */
+
 @media (prefers-reduced-motion: reduce) {
-	* {
+	*,
+	*::before,
+	*::after {
 		transition: none !important;
+	}
+
+	.squiggle path,
+	.logo-mark .mark-dot,
+	body::before,
+	body::after,
+	.badge-overdue,
+	.count-overdue,
+	.live-dot,
+	.live-dot::after,
+	.loader span {
+		animation: none !important;
+	}
+
+	.sign-in,
+	.room-card,
+	.empty-state,
+	.message.is-new {
+		animation: fade-in var(--motion-base) ease backwards;
 	}
 }

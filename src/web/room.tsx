@@ -1,8 +1,9 @@
 // One room: its board in four columns, its messages with earlier pages on request, and who is in it.
 import { useRef, useState } from "preact/hooks";
 import { api, type Message, type MessagePage, type RoomDetail, roomsPath, type Task, type Viewer } from "./api.ts";
+import { useBoardMotion } from "./motion.ts";
 import { usePolling } from "./poll.ts";
-import { Badge, plural, Squiggle, Time } from "./ui.tsx";
+import { Badge, Live, plural, Squiggle, Status, Time } from "./ui.tsx";
 
 const PAGE = 50;
 const COLUMNS = ["open", "claimed", "done", "confirmed"] as const;
@@ -41,7 +42,11 @@ function TaskCard({ task }: { task: Task }) {
 	].filter(Boolean);
 
 	return (
-		<li class={`task${task.overdue ? " is-overdue" : ""}${task.blocked ? " is-blocked" : ""}`}>
+		<li
+			class={`task${task.overdue ? " is-overdue" : ""}${task.blocked ? " is-blocked" : ""}`}
+			data-task={task.number}
+			data-status={task.status}
+		>
 			<p class="task-title">
 				<span class="task-number">#{task.number}</span> {task.title}
 			</p>
@@ -60,8 +65,10 @@ function TaskCard({ task }: { task: Task }) {
 }
 
 function Board({ tasks }: { tasks: Task[] }) {
+	const board = useRef<HTMLDivElement>(null);
+	useBoardMotion(board, tasks);
 	return (
-		<div class="board">
+		<div class="board" ref={board}>
 			{COLUMNS.map((name) => {
 				const inColumn = tasks.filter((task) => task.status === name);
 				return (
@@ -86,10 +93,11 @@ function Board({ tasks }: { tasks: Task[] }) {
 	);
 }
 
-function MessageItem({ message }: { message: Message }) {
+function MessageItem({ message, arrived }: { message: Message; arrived: boolean }) {
+	const fresh = arrived ? " is-new" : "";
 	if (message.sender === "[board]") {
 		return (
-			<li class="message board-line">
+			<li class={`message board-line${fresh}`}>
 				<span class="board-line-tag">board</span>
 				<span class="text">{message.text}</span>
 				<span class="meta">
@@ -100,7 +108,7 @@ function MessageItem({ message }: { message: Message }) {
 	}
 	const tone = senderTone(message.sender);
 	return (
-		<li class="message">
+		<li class={`message${fresh}`}>
 			<span class={`avatar avatar-${tone}`} aria-hidden="true">
 				{message.sender.slice(0, 1).toUpperCase()}
 			</span>
@@ -124,6 +132,8 @@ export function RoomView({ viewer, roomId, onRefused }: { viewer: Viewer; roomId
 	const [earlierError, setEarlierError] = useState("");
 	// The seqs shown so far: messages[oldest..newest]. Unset until the first load.
 	const range = useRef<{ oldest: number; newest: number } | null>(null);
+	// The newest seq of the first load: anything after it arrived while the page was open, and pops in.
+	const firstNewest = useRef(Number.POSITIVE_INFINITY);
 
 	/** Reads every message after since, following more until the end. */
 	async function readFrom(since: number): Promise<Message[]> {
@@ -138,7 +148,7 @@ export function RoomView({ viewer, roomId, onRefused }: { viewer: Viewer; roomId
 		}
 	}
 
-	const status = usePolling(
+	const { status, loading, live } = usePolling(
 		async () => {
 			const [{ room: next }, { tasks: board }] = await Promise.all([
 				api<{ room: RoomDetail }>(viewer, base),
@@ -156,6 +166,7 @@ export function RoomView({ viewer, roomId, onRefused }: { viewer: Viewer; roomId
 					oldest: page.length > 0 ? page[0].seq : next.lastSeq + 1,
 					newest: page.length > 0 ? page[page.length - 1].seq : next.lastSeq,
 				};
+				firstNewest.current = range.current.newest;
 				setMessages(page);
 				setHasEarlier(since > 0 && page.length > 0);
 			} else if (next.lastSeq > shown.newest) {
@@ -205,6 +216,7 @@ export function RoomView({ viewer, roomId, onRefused }: { viewer: Viewer; roomId
 				<h1 class="page-title">
 					Room <code class="room-id">{roomId}</code>
 				</h1>
+				{!loading && <Live on={live} />}
 			</div>
 			{room && (
 				<p class="room-state">
@@ -221,9 +233,7 @@ export function RoomView({ viewer, roomId, onRefused }: { viewer: Viewer; roomId
 					</span>
 				</p>
 			)}
-			<p class="status" role="status">
-				{status || earlierError}
-			</p>
+			<Status text={status || earlierError} loading={loading} />
 
 			<section class="frame panel panel-board" aria-labelledby="board-title">
 				<div class="panel-head">
@@ -249,7 +259,7 @@ export function RoomView({ viewer, roomId, onRefused }: { viewer: Viewer; roomId
 					) : (
 						<ol class="messages">
 							{messages?.map((message) => (
-								<MessageItem key={message.seq} message={message} />
+								<MessageItem key={message.seq} message={message} arrived={message.seq > firstNewest.current} />
 							))}
 						</ol>
 					)}

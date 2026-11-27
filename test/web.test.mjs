@@ -89,3 +89,19 @@ test("the core handler both hosts share serves /app and its files with the secur
 	const other = new URL("https://rooms.example/app/x");
 	assert.equal(serveApp(new Request(other), other, assets), null);
 });
+
+test("the page's motion moves transform and opacity only, and stops under reduced motion", () => {
+	const css = readFileSync(new URL("styles/app.css", sourceDir), "utf8");
+	const frames = [...css.matchAll(/@keyframes ([\w-]+) \{([\s\S]*?)\n\}/g)];
+	assert.ok(frames.length >= 5, "the keyframes were found");
+	for (const [, name, body] of frames) {
+		for (const [, property] of body.matchAll(/^\s*([a-z-]+):/gm)) {
+			assert.ok(["transform", "opacity"].includes(property), `@keyframes ${name} animates ${property}`);
+		}
+	}
+	const reduced = css.match(/@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/);
+	assert.ok(reduced, "there is a reduced-motion block");
+	assert.match(reduced[1], /transition: none !important/);
+	assert.match(reduced[1], /animation: none !important/);
+	assert.match(source, /prefers-reduced-motion: reduce/, "the scripted motion checks it too");
+});

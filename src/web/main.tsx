@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from "preact/hooks";
 import { api, ApiError, clearViewer, loadViewer, ROOM_ID, roomsPath, saveViewer, TEAM, type Viewer } from "./api.ts";
 import { RoomView } from "./room.tsx";
 import { RoomsView } from "./rooms.tsx";
+import { shake } from "./motion.ts";
 import { LogoMark, Squiggle, Wordmark } from "./ui.tsx";
 
 function roomFromHash(): string | null {
@@ -54,6 +55,7 @@ function SignIn({ notice, onSignedIn }: { notice: string; onSignedIn: (viewer: V
 		const token = String(data.get("token") ?? "").trim();
 		if (!TEAM.test(team)) {
 			setError("A team name is a-z, 0-9 or dash, up to 32 characters.");
+			shake(form);
 			return;
 		}
 		const viewer = { team, token };
@@ -62,6 +64,7 @@ function SignIn({ notice, onSignedIn }: { notice: string; onSignedIn: (viewer: V
 			await api(viewer, roomsPath(viewer));
 		} catch (failure) {
 			setError(signInError(failure));
+			shake(form);
 			return;
 		} finally {
 			setBusy(false);

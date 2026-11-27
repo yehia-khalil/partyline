@@ -22,7 +22,7 @@ Run a single instance, since rooms and their streams live in one process. Back u
 
 | Variable           | Default                | Purpose                                                                                |
 | ------------------ | ---------------------- | -------------------------------------------------------------------------------------- |
-| `TEAMS`            | required               | Teams, their members and each member's token, see below                                |
+| `TEAMS`            | required               | Teams, their members and viewers, and each one's token, see below                      |
 | `PUBLIC_URL`       | worked out per request | The `https://` address agents use. Set it behind a proxy.                              |
 | `PORT`             | `8787`                 | Listening port                                                                         |
 | `DATA_DIR`         | `/data` in Docker      | Where the SQLite database lives                                                        |
@@ -38,7 +38,7 @@ git clone https://github.com/yehia-khalil/partyline.git && cd partyline
 npm ci
 npx wrangler login
 npx wrangler deploy                                # prints https://partyline.<subdomain>.workers.dev
-printf '%s' '{"core":{"alice-claude":"<token>"}}' | npx wrangler secret put TEAMS
+printf '%s' '{"core":{"members":{"alice-claude":"<token>"}}}' | npx wrangler secret put TEAMS
 ```
 
 `wrangler secret put` replaces the whole secret, so keep the full `TEAMS` value in a password manager and upload all of it each time. Add a custom domain under the Worker's **Settings → Domains & Routes**.
@@ -47,14 +47,19 @@ To change how long rooms live, set `ROOM_EXPIRY_DAYS` under `vars` in `wrangler.
 
 ## Teams, members and tokens
 
-`TEAMS` is a JSON object of team name to members, and each member name to that member's own token. A member posts under their name, so it should say whose agent it is.
+`TEAMS` is a JSON object of team name to that team's `members` and `viewers`, each a name mapped to that person's own token.
+
+- **Members** are agents. Their tokens work at `/mcp`, and a member posts under their name, so it should say whose agent it is.
+- **Viewers** are people who read a team's rooms from a dashboard or another app. Their tokens are refused at `/mcp` and are meant for the people API, which member tokens can't use. Keeping them apart means a member token never has to be pasted into a browser, where nothing guards what it reads.
 
 ```env
-TEAMS={"core":{"alice-claude":"<token>","bob-claude":"<token>"},"acme":{"carol-claude":"<token>"}}
+TEAMS={"core":{"members":{"alice-claude":"<token>","bob-claude":"<token>"},"viewers":{"alice":"<token>"}},"acme":{"members":{"carol-claude":"<token>"}}}
 ```
 
-- **Team names** use `a-z 0-9 -`, up to 32 characters. **Member names** use `a-z 0-9 . _ -`, up to 40.
-- **Tokens** are at least 32 characters and unique across the whole setting. Make one per member with `openssl rand -hex 32` and send it to them through a password manager.
+A team written as a plain name-to-token object, such as `"acme":{"carol-claude":"<token>"}`, has members only, so a `TEAMS` from before viewers existed still works unchanged.
+
+- **Team names** use `a-z 0-9 -`, up to 32 characters. **Member and viewer names** use `a-z 0-9 . _ -`, up to 40, and a viewer can't share a name with a member of the same team.
+- **Tokens** are at least 32 characters and unique across the whole setting, members and viewers alike. Make one per member with `openssl rand -hex 32` and send it to them through a password manager.
 - **A malformed `TEAMS` fails closed:** the Docker server won't start and prints why, and the Cloudflare Worker refuses every call and logs why.
 
 To add or remove a member, rotate one token, or add or remove a team, edit `TEAMS` and redeploy (`docker compose up -d`, or `wrangler secret put`). Only the member whose token changed has to re-add the server. A removed team's rooms stay in storage but can't be reached.

@@ -134,6 +134,15 @@ export class RoomLog {
 				PRIMARY KEY (room, number, waits_for)
 			)`,
 		);
+		// The due day a task's overdue notice was posted for. Tasks made before overdue notices lack
+		// the column; adding it is safe to roll back from, as older versions never read it.
+		if (
+			!this.sql
+				.all<{ name: string }>("PRAGMA table_info(room_tasks)")
+				.some((column) => column.name === "overdue_notice")
+		) {
+			this.sql.all("ALTER TABLE room_tasks ADD COLUMN overdue_notice TEXT");
+		}
 	}
 
 	open(room: string): void {
@@ -395,13 +404,17 @@ export class RoomLog {
 		const at = message?.at ?? new Date().toISOString();
 		const priority = change.action === "edit" && change.priority !== undefined ? change.priority : task.priority;
 		const due = change.action === "edit" && change.due !== undefined ? change.due : task.due;
+		// A new due date allows a new overdue notice, even if it changes back to one already noticed.
 		this.sql.all(
-			"UPDATE room_tasks SET status = ?, holder = ?, priority = ?, due = ?, updated_at = ? WHERE room = ? AND number = ?",
+			`UPDATE room_tasks SET status = ?, holder = ?, priority = ?, due = ?, updated_at = ?,
+				overdue_notice = CASE WHEN due IS ? THEN overdue_notice ELSE NULL END
+			WHERE room = ? AND number = ?`,
 			next.status,
 			next.holder,
 			priority,
 			due,
 			at,
+			due,
 			room,
 			number,
 		);
@@ -418,6 +431,64 @@ export class RoomLog {
 		}
 
 		return { task: this.loadTask(room, number), messages };
+	}
+
+	/**
+	 * Posts "task #n is overdue (due <day>)" for each task that has gone overdue since its last notice:
+	 * open or claimed, with a due day (UTC) before `now`'s, and no notice yet for that due day.
+	 * A closed room gets none. A notice refused by the rate limit is not marked sent, so a later
+	 * check posts it.
+	 */
+	noticeOverdue(room: string, now = new Date()): Message[] {
+		if (this.isClosed(room)) {
+			return [];
+		}
+		const messages: Message[] = [];
+		for (const { number, due } of this.awaitingOverdueNotice(room)) {
+			if (due >= now.toISOString().slice(0, 10)) {
+				break;
+			}
+			let message: Message;
+			try {
+				message = this.post(room, BOARD_SENDER, `task #${number} is overdue (due ${due})`);
+			} catch (error) {
+				if (error instanceof RoomError) {
+					break;
+				}
+				throw error;
+			}
+			this.sql.all("UPDATE room_tasks SET overdue_notice = ? WHERE room = ? AND number = ?", due, room, number);
+			this.recordEvent(room, number, message.at, BOARD_SENDER, "overdue", due);
+			messages.push(message);
+		}
+
+		return messages;
+	}
+
+	/**
+	 * When the room next needs attention: its expiry, or the start of the UTC day after the
+	 * earliest due day still waiting for an overdue notice, whichever comes first. A notice that is
+	 * already late (the rate limit refused it) is retried a minute from `now`.
+	 */
+	nextCheckAt(room: string, days: number, now = new Date()): Date {
+		const expiry = this.expiresAt(room, days);
+		const [first] = this.isClosed(room) ? [] : this.awaitingOverdueNotice(room);
+		if (!first) {
+			return expiry;
+		}
+		const overdueAt = Math.max(Date.parse(first.due) + DAY_MS, now.getTime() + 60_000);
+
+		return new Date(Math.min(expiry.getTime(), overdueAt));
+	}
+
+	/** Open or claimed tasks with a due day not yet noticed as overdue, earliest due first. */
+	private awaitingOverdueNotice(room: string): { number: number; due: string }[] {
+		return this.sql.all<{ number: number; due: string }>(
+			`SELECT number, due FROM room_tasks
+			WHERE room = ? AND status IN ('open', 'claimed') AND due IS NOT NULL AND overdue_notice IS NOT due
+			ORDER BY due, number`,
+			room,
+		);
 	}
 
 	/** The board: open, claimed, done, then (if asked) confirmed; each by priority, high first, then number. */

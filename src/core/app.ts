@@ -5,6 +5,7 @@
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
+	MAX_WAITS_FOR,
 	type Message,
 	type NewTask,
 	type Priority,
@@ -24,7 +25,7 @@ export interface Rooms {
 	isClosed(team: string, roomId: string): Promise<boolean>;
 	/** Adds a task to the room's board and pushes its board line to the room's streams. */
 	addTask(team: string, roomId: string, actor: string, task: NewTask): Promise<Task>;
-	/** Applies one step to a task and pushes its board line, if the step has one, to the room's streams. */
+	/** Applies one step to a task and pushes its board lines (the step's, if it has one, and any "unblocked") to the room's streams. */
 	updateTask(team: string, roomId: string, actor: string, number: number, change: TaskChange): Promise<Task>;
 	listTasks(team: string, roomId: string, includeConfirmed: boolean): Promise<Task[]>;
 	getTask(team: string, roomId: string, number: number): Promise<{ task: Task; events: TaskEvent[]; earlier: number }>;
@@ -148,11 +149,15 @@ function formatBoard(tasks: Task[], today: string): string {
 	}
 
 	const lines = tasks.map((task) => {
-		const parts = [`#${task.number} [${task.status}] (${task.priority}) ${untrusted(task.title)}`];
+		const status = task.blocked ? `${task.status}, blocked` : task.status;
+		const parts = [`#${task.number} [${status}] (${task.priority}) ${untrusted(task.title)}`];
 		if (task.holder) {
 			parts.push(`holder: ${task.holder}`);
 		}
 		parts.push(`created by: ${task.createdBy}`);
+		if (task.waitsFor.length > 0) {
+			parts.push(`waits for: ${task.waitsFor.map((n) => `#${n}`).join(", ")}`);
+		}
 		if (task.due) {
 			const overdue = task.due < today && (task.status === "open" || task.status === "claimed");
 			parts.push(`due: ${task.due}${overdue ? " (overdue)" : ""}`);
@@ -335,6 +340,10 @@ This room is closed.`
 	);
 
 	const prioritySchema = z.enum(["low", "normal", "high"]);
+	const waitsForSchema = z
+		.array(z.number().int().min(1))
+		.max(MAX_WAITS_FOR)
+		.describe(`Numbers of tasks on this room's board that must be confirmed first, up to ${MAX_WAITS_FOR}.`);
 
 	server.registerTool(
 		"list_tasks",
@@ -370,18 +379,26 @@ This room is closed.`
 		"add_task",
 		{
 			description:
-				"Put a task on a room's board. done_when says what finished looks like; you, as its creator, confirm it against that.",
+				"Put a task on a room's board. done_when says what finished looks like; you, as its creator, confirm it against that. " +
+				"waits_for lists tasks on the same board it waits for: it shows as blocked, and can be claimed but not marked done, until they are all confirmed.",
 			inputSchema: z.object({
 				room: roomIdSchema,
 				title: z.string().min(1).max(200),
 				done_when: z.string().min(1).max(1000).optional(),
 				priority: prioritySchema.optional(),
 				due: z.string().optional().describe("A UTC day, YYYY-MM-DD."),
+				waits_for: waitsForSchema.optional(),
 			}),
 		},
-		async ({ room, title, done_when, priority, due }) => {
+		async ({ room, title, done_when, priority, due, waits_for }) => {
 			checkDue(due);
-			const task = await rooms.addTask(team, room, name, { title, doneWhen: done_when, priority, due });
+			const task = await rooms.addTask(team, room, name, {
+				title,
+				doneWhen: done_when,
+				priority,
+				due,
+				waitsFor: waits_for,
+			});
 
 			return text(`Added task #${task.number}.`);
 		},
@@ -393,7 +410,8 @@ This room is closed.`
 			description:
 				"Take a step on a task: claim (an open task), release or hand_off (to: a team member) or done (as its holder), " +
 				"confirm or send_back (with a reason, as its creator), reclaim (as its creator, once its holder has left the team), " +
-				"or edit its priority and due date (creator or holder). Once the creator has left the team, any member can take the creator's steps.",
+				"or edit its priority, due date and waits_for (creator or holder; waits_for replaces the list, [] clears it). " +
+				"A blocked task can be claimed but not marked done. Once the creator has left the team, any member can take the creator's steps.",
 			inputSchema: z.object({
 				room: roomIdSchema,
 				task: z.number().int().min(1),
@@ -402,9 +420,10 @@ This room is closed.`
 				reason: z.string().min(1).max(1000).optional(),
 				priority: prioritySchema.optional(),
 				due: z.string().nullable().optional().describe("A UTC day, YYYY-MM-DD, or null to clear it."),
+				waits_for: waitsForSchema.optional(),
 			}),
 		},
-		async ({ room, task, action, to, reason, priority, due }) => {
+		async ({ room, task, action, to, reason, priority, due, waits_for }) => {
 			let change: TaskChange;
 			switch (action) {
 				case "hand_off":
@@ -427,11 +446,17 @@ This room is closed.`
 					change = { action, members: teamMembers };
 					break;
 				case "edit":
-					if (priority === undefined && due === undefined) {
-						throw new RoomError("edit needs a priority or a due date.");
+					if (priority === undefined && due === undefined && waits_for === undefined) {
+						throw new RoomError("edit needs a priority, a due date or waits_for.");
 					}
 					checkDue(due);
-					change = { action, priority: priority as Priority | undefined, due, members: teamMembers };
+					change = {
+						action,
+						priority: priority as Priority | undefined,
+						due,
+						waitsFor: waits_for,
+						members: teamMembers,
+					};
 					break;
 				default:
 					change = { action };

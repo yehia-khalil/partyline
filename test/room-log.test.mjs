@@ -279,13 +279,13 @@ test("hand off to the current holder is refused", () => {
 test("edit changes priority and due, posts nothing, and is refused once confirmed", () => {
 	const { log } = board();
 	const before = boardLines(log).length;
-	const { task, message } = log.updateTask(ROOM, ALICE, 1, {
+	const { task, messages } = log.updateTask(ROOM, ALICE, 1, {
 		action: "edit",
 		priority: "high",
 		due: "2099-01-01",
 		members: TEAM,
 	});
-	assert.equal(message, null);
+	assert.deepEqual(messages, []);
 	assert.equal(task.priority, "high");
 	assert.equal(task.due, "2099-01-01");
 	assert.equal(boardLines(log).length, before);
@@ -397,4 +397,179 @@ test("a task's history shows its last 50 steps and counts the rest", () => {
 	assert.equal(events[0].seq, 31);
 	assert.equal(events.at(-1).seq, 80);
 	assert.equal(earlier, 30);
+});
+
+// ---- Tasks that wait for other tasks ----
+
+/** A room with tasks #1 and #2 by alice, and #3 by alice waiting for both. */
+function waitingBoard() {
+	const { db, log } = freshLog();
+	log.open(ROOM);
+	log.addTask(ROOM, ALICE, { title: "schema" });
+	log.addTask(ROOM, ALICE, { title: "api" });
+	log.addTask(ROOM, ALICE, { title: "client", waitsFor: [2, 1, 2] });
+
+	return { db, log };
+}
+
+const finish = (log, number) => {
+	log.updateTask(ROOM, BOB, number, { action: "claim" });
+	log.updateTask(ROOM, BOB, number, { action: "done" });
+	return log.updateTask(ROOM, ALICE, number, { action: "confirm", members: TEAM });
+};
+
+test("a task that waits for others shows as blocked until they are all confirmed", () => {
+	const { log } = waitingBoard();
+	const { task } = log.getTask(ROOM, 3);
+	assert.deepEqual(task.waitsFor, [1, 2]);
+	assert.equal(task.blocked, true);
+	assert.equal(log.getTask(ROOM, 1).task.blocked, false);
+	assert.deepEqual(log.getTask(ROOM, 1).task.waitsFor, []);
+
+	finish(log, 1);
+	assert.equal(log.getTask(ROOM, 3).task.blocked, true);
+	// Done is not enough: the wait ends only when the task is confirmed.
+	log.updateTask(ROOM, BOB, 2, { action: "claim" });
+	log.updateTask(ROOM, BOB, 2, { action: "done" });
+	assert.equal(log.listTasks(ROOM, false).find((t) => t.number === 3).blocked, true);
+	log.updateTask(ROOM, ALICE, 2, { action: "confirm", members: TEAM });
+	assert.equal(log.getTask(ROOM, 3).task.blocked, false);
+});
+
+test("a task can only wait for tasks on the same board", () => {
+	const { log } = waitingBoard();
+	const other = "core:" + "b".repeat(32);
+	log.open(other);
+	assert.throws(() => log.addTask(other, ALICE, { title: "x", waitsFor: [1] }), /No task #1 in this room/);
+	assert.throws(() => log.addTask(ROOM, ALICE, { title: "x", waitsFor: [9] }), /No task #9 in this room/);
+	assert.throws(
+		() => log.updateTask(ROOM, ALICE, 1, { action: "edit", waitsFor: [9], members: TEAM }),
+		/No task #9 in this room/,
+	);
+	assert.equal(log.listTasks(ROOM, true).length, 3);
+	assert.deepEqual(log.getTask(ROOM, 1).task.waitsFor, []);
+});
+
+test("waiting loops are refused, including a task waiting for itself", () => {
+	const { log } = waitingBoard();
+	assert.throws(
+		() => log.updateTask(ROOM, ALICE, 1, { action: "edit", waitsFor: [1], members: TEAM }),
+		/can't wait for itself/,
+	);
+	// #3 waits for #1, so #1 waiting for #3 would be a loop.
+	assert.throws(
+		() => log.updateTask(ROOM, ALICE, 1, { action: "edit", waitsFor: [3], members: TEAM }),
+		/would make a loop/,
+	);
+	// An indirect loop: #4 waits for #3, which waits for #1.
+	log.addTask(ROOM, ALICE, { title: "release", waitsFor: [3] });
+	assert.throws(
+		() => log.updateTask(ROOM, ALICE, 1, { action: "edit", waitsFor: [4], members: TEAM }),
+		/would make a loop/,
+	);
+	assert.deepEqual(log.getTask(ROOM, 1).task.waitsFor, []);
+	// Waiting for a task that waits for something else is not a loop.
+	log.updateTask(ROOM, ALICE, 2, { action: "edit", waitsFor: [1], members: TEAM });
+	assert.deepEqual(log.getTask(ROOM, 2).task.waitsFor, [1]);
+});
+
+test("a task waits for at most 10 others", () => {
+	const { log } = freshLog();
+	log.open(ROOM);
+	for (let i = 1; i <= 11; i++) {
+		log.addTask(ROOM, ALICE, { title: `t${i}` });
+	}
+	const eleven = Array.from({ length: 11 }, (_, i) => i + 1);
+	assert.throws(() => log.addTask(ROOM, ALICE, { title: "x", waitsFor: eleven }), /at most 10/);
+	log.addTask(ROOM, ALICE, { title: "ten", waitsFor: eleven.slice(0, 10) });
+	assert.equal(log.getTask(ROOM, 12).task.waitsFor.length, 10);
+});
+
+test("a blocked task can be claimed early but not marked done", () => {
+	const { log } = waitingBoard();
+	const { task } = log.updateTask(ROOM, BOB, 3, { action: "claim" });
+	assert.equal(task.status, "claimed");
+	assert.equal(task.blocked, true);
+	assert.throws(() => log.updateTask(ROOM, BOB, 3, { action: "done" }), /blocked: it waits for #1, #2/);
+	assert.equal(log.getTask(ROOM, 3).task.status, "claimed");
+
+	finish(log, 1);
+	assert.throws(() => log.updateTask(ROOM, BOB, 3, { action: "done" }), /blocked: it waits for #2,/);
+	finish(log, 2);
+	assert.equal(log.updateTask(ROOM, BOB, 3, { action: "done" }).task.status, "done");
+});
+
+test("confirming the last task waited for posts an unblocked line", () => {
+	const { log } = waitingBoard();
+	log.addTask(ROOM, ALICE, { title: "docs", waitsFor: [2] });
+	assert.deepEqual(
+		finish(log, 1).messages.map((m) => m.text),
+		["task #1 confirmed by alice-claude"],
+	);
+
+	const { messages } = finish(log, 2);
+	assert.deepEqual(
+		messages.map((m) => [m.sender, m.text]),
+		[
+			["[board]", "task #2 confirmed by alice-claude"],
+			["[board]", "task #3 unblocked"],
+			["[board]", "task #4 unblocked"],
+		],
+	);
+	assert.deepEqual(
+		boardLines(log).slice(-3),
+		messages.map((m) => m.text),
+	);
+	assert.equal(log.getTask(ROOM, 3).events.at(-1).action, "unblocked");
+});
+
+test("an unblocked line is not posted for a task already confirmed or that waits for nothing unconfirmed", () => {
+	const { log } = waitingBoard();
+	finish(log, 1);
+	// Clearing the waits unblocks #3 by edit, which posts nothing; confirming #2 later says nothing about #3.
+	log.updateTask(ROOM, ALICE, 3, { action: "edit", waitsFor: [], members: TEAM });
+	assert.equal(log.getTask(ROOM, 3).task.blocked, false);
+	assert.deepEqual(finish(log, 2).messages.length, 1);
+});
+
+test("a confirm that would push its unblocked lines over the rate limit is refused and changes nothing", () => {
+	const { log } = waitingBoard();
+	log.addTask(ROOM, ALICE, { title: "docs", waitsFor: [1] });
+	log.updateTask(ROOM, ALICE, 3, { action: "edit", waitsFor: [1], members: TEAM });
+	log.updateTask(ROOM, BOB, 1, { action: "claim" });
+	log.updateTask(ROOM, BOB, 1, { action: "done" });
+	// 4 adds, claim, done and edit make 7; 22 more leave room for the confirm but not its two unblocked lines.
+	for (let i = 0; i < 22; i++) {
+		log.post(ROOM, BOB, `filler ${i}`);
+	}
+	assert.throws(() => log.updateTask(ROOM, ALICE, 1, { action: "confirm", members: TEAM }), /Room limit/);
+	assert.equal(log.getTask(ROOM, 1).task.status, "done");
+	assert.equal(log.getTask(ROOM, 3).task.blocked, true);
+});
+
+test("what a task waits for can't change once it is marked done", () => {
+	const { log } = waitingBoard();
+	log.updateTask(ROOM, BOB, 1, { action: "claim" });
+	log.updateTask(ROOM, BOB, 1, { action: "done" });
+	assert.throws(() => log.updateTask(ROOM, ALICE, 1, { action: "edit", waitsFor: [2], members: TEAM }), /marked done/);
+});
+
+test("a room made before tasks could wait still loads, with tasks that wait for nothing", () => {
+	const { db, log } = freshLog();
+	log.open(ROOM);
+	log.addTask(ROOM, ALICE, { title: "old task" });
+	db.exec("DROP TABLE room_task_waits");
+
+	const reopened = new RoomLog({ all: (query, ...params) => db.prepare(query).all(...params) });
+	const [task] = reopened.listTasks(ROOM, true);
+	assert.deepEqual(task.waitsFor, []);
+	assert.equal(task.blocked, false);
+	reopened.updateTask(ROOM, BOB, 1, { action: "claim" });
+	assert.equal(reopened.updateTask(ROOM, BOB, 1, { action: "done" }).task.status, "done");
+});
+
+test("deleting a room removes what its tasks wait for", () => {
+	const { db, log } = waitingBoard();
+	log.delete(ROOM);
+	assert.equal(db.prepare("SELECT COUNT(*) AS n FROM room_task_waits").get().n, 0);
 });

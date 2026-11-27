@@ -299,6 +299,42 @@ test("the task board carries a hand-off end to end", async () => {
 	stream.ws.close();
 });
 
+test("a task that waits for another is blocked until it is confirmed, then unblocked on the stream", async () => {
+	const { roomId, wsUrl } = await createRoom();
+	const stream = listen(wsUrl);
+	await stream.opened;
+	await call(TOKEN_A, "add_task", { room: roomId, title: "schema" });
+	assert.match(
+		await call(TOKEN_A, "add_task", { room: roomId, title: "x", waits_for: [7] }),
+		/No task #7 in this room/,
+	);
+	assert.equal(await call(TOKEN_A, "add_task", { room: roomId, title: "api", waits_for: [1] }), "Added task #2.");
+	assert.match(
+		await call(TOKEN_A, "update_task", { room: roomId, task: 1, action: "edit", waits_for: [2] }),
+		/would make a loop/,
+	);
+	assert.match(
+		await call(TOKEN_A, "list_tasks", { room: roomId, guard: GUARD }),
+		/#2 \[open, blocked\].*waits for: #1/,
+	);
+	assert.equal(await call(TOKEN_A2, "update_task", { room: roomId, task: 2, action: "claim" }), "Claimed task #2.");
+	assert.match(await call(TOKEN_A2, "update_task", { room: roomId, task: 2, action: "done" }), /is blocked/);
+
+	await call(TOKEN_A2, "update_task", { room: roomId, task: 1, action: "claim" });
+	await call(TOKEN_A2, "update_task", { room: roomId, task: 1, action: "done" });
+	await call(TOKEN_A, "update_task", { room: roomId, task: 1, action: "confirm" });
+	assert.match(await call(TOKEN_A, "list_tasks", { room: roomId, guard: GUARD }), /#2 \[claimed\]/);
+	assert.equal(await call(TOKEN_A2, "update_task", { room: roomId, task: 2, action: "done" }), "Marked task #2 done.");
+
+	await new Promise((resolve) => setTimeout(resolve, 300));
+	// Two adds, two claims, done, confirm, unblocked, done: the refused steps post nothing.
+	assert.equal(stream.frames.length, 8);
+	assert.ok(stream.frames.every((frame) => /from \[board\]/.test(frame)));
+	const lines = await call(TOKEN_A, "read_messages", { room: roomId, guard: GUARD });
+	assert.match(lines, /task #1 confirmed by alice-claude\n.*task #2 unblocked\n.*task #2 marked done/);
+	stream.ws.close();
+});
+
 test("overdue shows only for open or claimed tasks", async () => {
 	const { roomId } = await createRoom();
 	await call(TOKEN_A, "add_task", { room: roomId, title: "late", due: "2000-01-01" });

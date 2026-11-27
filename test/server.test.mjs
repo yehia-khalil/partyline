@@ -2,7 +2,7 @@
  * End-to-end tests of the server, against the Node build by default.
  * Point them at another deployment (e.g. Cloudflare) with:
  *   PARTYLINE_URL=https://… TOKEN_A=<alice-claude's token> TOKEN_A2=<bob-claude's token, same team> \
- *   TOKEN_B=<a member of another team> npm test
+ *   TOKEN_B=<a member of another team> VIEWER_A=<a viewer of alice-claude's team> npm test
  */
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -33,8 +33,10 @@ const dataDir = mkdtempSync(join(tmpdir(), "partyline-"));
 let base = remote;
 let server;
 
+const VIEWER_A = process.env.VIEWER_A ?? "v".repeat(64);
+// core uses the grouped shape with a viewer; other keeps the older members-only shorthand.
 const TEAMS = {
-	core: { "alice-claude": TOKEN_A, "bob-claude": TOKEN_A2 },
+	core: { members: { "alice-claude": TOKEN_A, "bob-claude": TOKEN_A2 }, viewers: { alice: VIEWER_A } },
 	other: { "carol-claude": TOKEN_B },
 };
 
@@ -120,6 +122,17 @@ after(async () => {
 test("calls without a known member token are refused", async () => {
 	assert.equal(await call("x".repeat(64), "create_room", {}), "HTTP 401");
 	assert.equal((await fetch(`${base}/mcp`, { method: "POST" })).status, 401);
+});
+
+test("a viewer token is refused at /mcp and says why", async () => {
+	assert.equal(await call(VIEWER_A, "create_room", {}), "HTTP 403");
+	const response = await fetch(`${base}/mcp`, { method: "POST", headers: { Authorization: `Bearer ${VIEWER_A}` } });
+	assert.match(await response.text(), /viewer tokens can't use \/mcp/);
+});
+
+test("both TEAMS shapes load: grouped members and the members-only shorthand", async () => {
+	assert.match(await call(TOKEN_A, "create_room", {}), /team core/);
+	assert.match(await call(TOKEN_B, "create_room", {}), /team other/);
 });
 
 test("a room carries messages in order and pushes a notice without the text", async () => {
@@ -460,6 +473,15 @@ test("the Node server refuses to start on a malformed TEAMS and says why", { ski
 		[{ core: { "alice-claude": TOKEN_A, "bob-claude": TOKEN_A } }, /token of "core\/bob-claude" is also used/],
 		[{ core: { "Alice Claude": TOKEN_A } }, /member "core\/Alice Claude" must be/],
 		[{ core: { "alice-claude": "short" } }, /at least 32 characters/],
+		[
+			{ core: { members: { "alice-claude": TOKEN_A }, viewers: { "alice-claude": "v".repeat(64) } } },
+			/viewer "core\/alice-claude" has the same name as a member/,
+		],
+		[
+			{ core: { members: { "alice-claude": TOKEN_A }, viewers: { alice: TOKEN_A } } },
+			/token of "core\/alice" is also used/,
+		],
+		[{ core: { members: { "alice-claude": TOKEN_A }, owners: {} } }, /may only have "members" and "viewers"/],
 	];
 	for (const [teams, expected] of cases) {
 		const run = spawnSync(process.execPath, NODE_ARGS, {

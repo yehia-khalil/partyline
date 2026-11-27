@@ -2,7 +2,7 @@
  * partyline on Node: one process, rooms in a SQLite file, room streams over WebSockets.
  *
  * Environment:
- *   TEAMS       JSON object of team name to member name to token (required)
+ *   TEAMS       JSON object of team name to its members and viewers, each name to token (required)
  *   ROOM_EXPIRY_DAYS  days after its latest activity a room is deleted (default 30)
  *   PORT        port to listen on (default 8787)
  *   DATA_DIR    where partyline.db lives (default ./data)
@@ -37,7 +37,7 @@ try {
 	parseTeams(process.env.TEAMS);
 } catch (error) {
 	console.error(
-		`partyline: ${(error as Error).message} Set it like TEAMS='{"core":{"alice-claude":"<64-character token>"}}'.`,
+		`partyline: ${(error as Error).message} Set it like TEAMS='{"core":{"members":{"alice-claude":"<64-character token>"}}}'.`,
 	);
 	process.exit(1);
 }

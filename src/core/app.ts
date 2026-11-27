@@ -1,5 +1,5 @@
 /**
- * The host-neutral part of partyline: member tokens, the MCP tools and message formatting,
+ * The host-neutral part of partyline: member and viewer tokens, the MCP tools and message formatting,
  * written against web-standard Request and Response. Each host supplies its own Rooms.
  */
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
@@ -56,6 +56,10 @@ const MIN_TOKEN_LENGTH = 32;
 
 /** Who a request comes from: a member of a team, named by the token they hold. */
 export type Member = { team: string; name: string };
+/** A member is an agent that uses /mcp; a viewer is a person who only reads, through the people API. */
+export type Role = "member" | "viewer";
+export type Identity = Member & { role: Role };
+type Credential = Identity & { token: string };
 const SOCKET_PATH = /^\/t\/([a-z0-9-]{1,32})\/rooms\/([0-9a-f]{32})\/ws$/;
 
 /** Every read reply starts with this marker, which the local guard hook uses to recognise a room server. */
@@ -481,11 +485,13 @@ This room is closed.`
 }
 
 /**
- * Reads the TEAMS setting: team name to an object of member name to that member's token,
- * e.g. {"core": {"alice-claude": "<token>", "bob-claude": "<token>"}}. Throws on anything
- * malformed, including a token used twice, so a bad setting fails closed and says why.
+ * Reads the TEAMS setting: team name to its members and viewers, each a name mapped to a token,
+ * e.g. {"core": {"members": {"alice-claude": "<token>"}, "viewers": {"alice": "<token>"}}}.
+ * A team written as a plain name-to-token object, {"core": {"alice-claude": "<token>"}}, has
+ * members only. Throws on anything malformed, including a token used twice or a viewer named
+ * like a member of the same team, so a bad setting fails closed and says why.
  */
-export function parseTeams(teamsJson: string | undefined): Array<Member & { token: string }> {
+export function parseTeams(teamsJson: string | undefined): Credential[] {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(teamsJson ?? "");
@@ -493,37 +499,61 @@ export function parseTeams(teamsJson: string | undefined): Array<Member & { toke
 		throw new Error("TEAMS is not valid JSON.");
 	}
 	if (!isObject(parsed)) {
-		throw new Error('TEAMS must be a JSON object, e.g. {"core": {"alice-claude": "<token>"}}.');
+		throw new Error('TEAMS must be a JSON object, e.g. {"core": {"members": {"alice-claude": "<token>"}}}.');
 	}
 
-	const members: Array<Member & { token: string }> = [];
-	for (const [team, teamMembers] of Object.entries(parsed)) {
+	const credentials: Credential[] = [];
+	for (const [team, entry] of Object.entries(parsed)) {
 		if (!TEAM_NAME.test(team)) {
 			throw new Error(`TEAMS: team "${team}" must be a-z, 0-9 or dash, up to 32 characters.`);
 		}
-		if (!isObject(teamMembers)) {
-			throw new Error(`TEAMS: team "${team}" must map member names to tokens, e.g. {"alice-claude": "<token>"}.`);
+		if (!isObject(entry)) {
+			throw new Error(
+				`TEAMS: team "${team}" must map member names to tokens, e.g. {"members": {"alice-claude": "<token>"}}.`,
+			);
 		}
-		for (const [name, token] of Object.entries(teamMembers)) {
-			if (!MEMBER_NAME.test(name)) {
-				throw new Error(
-					`TEAMS: member "${team}/${name}" must be a-z, 0-9, dot, dash or underscore, up to 40 characters.`,
-				);
+		// Tokens are strings, so an object under "members" or "viewers" can only mean the grouped shape.
+		const grouped = isObject(entry.members) || isObject(entry.viewers);
+		if (grouped) {
+			const unknown = Object.keys(entry).find((key) => key !== "members" && key !== "viewers");
+			if (unknown !== undefined) {
+				throw new Error(`TEAMS: team "${team}" may only have "members" and "viewers", not "${unknown}".`);
 			}
-			if (typeof token !== "string" || token.length < MIN_TOKEN_LENGTH) {
-				throw new Error(`TEAMS: the token of "${team}/${name}" must be at least ${MIN_TOKEN_LENGTH} characters.`);
+		}
+		const groups: Array<[Role, unknown]> = grouped
+			? [
+					["member", entry.members ?? {}],
+					["viewer", entry.viewers ?? {}],
+				]
+			: [["member", entry]];
+		for (const [role, names] of groups) {
+			if (!isObject(names)) {
+				throw new Error(`TEAMS: the ${role}s of team "${team}" must map names to tokens.`);
 			}
-			if (members.some((member) => member.token === token)) {
-				throw new Error(`TEAMS: the token of "${team}/${name}" is also used by another member.`);
+			for (const [name, token] of Object.entries(names)) {
+				if (!MEMBER_NAME.test(name)) {
+					throw new Error(
+						`TEAMS: ${role} "${team}/${name}" must be a-z, 0-9, dot, dash or underscore, up to 40 characters.`,
+					);
+				}
+				if (typeof token !== "string" || token.length < MIN_TOKEN_LENGTH) {
+					throw new Error(`TEAMS: the token of "${team}/${name}" must be at least ${MIN_TOKEN_LENGTH} characters.`);
+				}
+				if (credentials.some((other) => other.token === token)) {
+					throw new Error(`TEAMS: the token of "${team}/${name}" is also used by someone else.`);
+				}
+				if (credentials.some((other) => other.team === team && other.name === name)) {
+					throw new Error(`TEAMS: viewer "${team}/${name}" has the same name as a member of the team.`);
+				}
+				credentials.push({ team, name, role, token });
 			}
-			members.push({ team, name, token });
 		}
 	}
-	if (members.length === 0) {
+	if (!credentials.some((credential) => credential.role === "member")) {
 		throw new Error("TEAMS has no members.");
 	}
 
-	return members;
+	return credentials;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -544,18 +574,22 @@ function sameDigest(a: Uint8Array, b: Uint8Array): boolean {
 	return difference === 0;
 }
 
-/** Returns the member whose token the request carries, or null. Every token is checked. */
-async function memberFor(request: Request, members: Array<Member & { token: string }>): Promise<Member | null> {
+/**
+ * Says who a request comes from: the team, name and role of the token it carries, or null for
+ * no token or an unknown one. Every token is compared in constant time. Each route admits one
+ * role: /mcp takes members only, and the people API takes viewers only.
+ */
+export async function identify(request: Request, credentials: Credential[]): Promise<Identity | null> {
 	const presented = request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "") ?? "";
 	if (!presented) {
 		return null;
 	}
 
 	const presentedDigest = await sha256(presented);
-	let match: Member | null = null;
-	for (const { team, name, token } of members) {
+	let match: Identity | null = null;
+	for (const { team, name, role, token } of credentials) {
 		if (sameDigest(presentedDigest, await sha256(token))) {
-			match = { team, name };
+			match = { team, name, role };
 		}
 	}
 
@@ -575,19 +609,25 @@ export async function handleRequest(
 	const url = new URL(request.url);
 
 	if (url.pathname === "/mcp") {
-		let members: Array<Member & { token: string }>;
+		let credentials: Credential[];
 		try {
-			members = parseTeams(teamsJson);
+			credentials = parseTeams(teamsJson);
 		} catch (error) {
 			console.error(`partyline: ${(error as Error).message}`);
 			return new Response("Server misconfigured", { status: 500 });
 		}
-		const member = await memberFor(request, members);
-		if (!member) {
+		const caller = await identify(request, credentials);
+		if (!caller) {
 			return new Response("Unauthorized", { status: 401 });
 		}
+		if (caller.role !== "member") {
+			return new Response("Forbidden: viewer tokens can't use /mcp, which takes agent member tokens.", {
+				status: 403,
+			});
+		}
 
-		const teamMembers = members.filter((m) => m.team === member.team).map((m) => m.name);
+		const member = { team: caller.team, name: caller.name };
+		const teamMembers = credentials.filter((c) => c.team === member.team && c.role === "member").map((c) => c.name);
 
 		return createMcpHandler(() => createServer(rooms, member, teamMembers, origin)).fetch(request);
 	}

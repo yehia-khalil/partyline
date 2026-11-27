@@ -3,14 +3,17 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
+		"build": "vite build",
 		"dev": "wrangler dev",
 		"deploy": "wrangler deploy",
 		"types": "wrangler types",
-		"check": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
+		"check": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+		"prestart:node": "npm run build",
 		"start:node": "node --experimental-sqlite --experimental-strip-types --disable-warning=ExperimentalWarning src/node/server.ts",
+		"pretest": "npm run build",
 		"test": "node --experimental-sqlite --experimental-strip-types --disable-warning=ExperimentalWarning --test hooks/*.test.mjs test/*.test.mjs",
-		"format": "prettier --write src hooks test docs .github \"*.{md,json,jsonc}\"",
-		"format:check": "prettier --check src hooks test docs .github \"*.{md,json,jsonc}\""
+		"format": "prettier --write src hooks test docs .github vite.config.ts \"*.{md,json,jsonc}\"",
+		"format:check": "prettier --check src hooks test docs .github vite.config.ts \"*.{md,json,jsonc}\""
 	},
 	"dependencies": {
 		"@modelcontextprotocol/server": "^2.4.0",
@@ -18,10 +21,13 @@
 		"zod": "^4.6.7"
 	},
 	"devDependencies": {
+		"@preact/preset-vite": "^2.10.6",
 		"@types/node": "^26.6.6",
 		"@types/ws": "^8.18.2",
+		"preact": "^11.2.0",
 		"prettier": "3.10.1",
 		"typescript": "^7.0.2",
+		"vite": "^8.4.0",
 		"wrangler": "^4.166.0"
 	},
 	"license": "MIT",

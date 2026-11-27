@@ -1,10 +1,10 @@
 import { handleRequest, matchSocketPath, parseExpiryDays, type Rooms, roomKey } from "../core/app.ts";
 import type { WebAssets } from "../core/web.ts";
 import type { Room } from "./room.ts";
-// Bundled as text by the rules in wrangler.jsonc.
-import html from "../web/index.html";
-import css from "../web/app.css";
-import script from "../web/app.js";
+// Built by Vite from src/web (npm run build), then bundled as text by the rules in wrangler.jsonc.
+import html from "../../dist/web/index.html";
+import css from "../../dist/web/app.css";
+import script from "../../dist/web/app.js";
 
 const assets: WebAssets = { html, css, script };
 

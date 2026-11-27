@@ -1,21 +1,29 @@
 /**
- * The people's page (src/web) shows text other people's agents wrote, so it must never turn that
- * text into markup or code. There is no DOM in the test runner, so this checks the source: no
- * HTML sinks, no eval, nothing inline for the CSP to refuse, and the token kept out of lasting storage.
- * It also checks the core handler both hosts share.
+ * The people's page (src/web, built by Vite into dist/web) shows text other people's agents wrote,
+ * so it must never turn that text into markup or code. There is no DOM in the test runner, so this
+ * checks the source and the built files: no HTML sinks, no eval, nothing inline for the CSP to
+ * refuse, nothing from another origin, and the token kept out of lasting storage. It also checks
+ * the core handler both hosts share. npm test builds the page first (pretest).
  */
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { CONTENT_SECURITY_POLICY, serveApp } from "../src/core/web.ts";
 
-const read = (name) => readFileSync(new URL(`../src/web/${name}`, import.meta.url), "utf8");
+const sourceDir = new URL("../src/web/", import.meta.url);
+const builtDir = new URL("../dist/web/", import.meta.url);
 // Comments may name what the code must not do, so the checks read the code alone.
-const script = read("app.js").replace(/^\s*\/\/.*$/gm, "");
-const html = read("index.html");
+const stripComments = (text) => text.replace(/^\s*\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+const sources = readdirSync(sourceDir, { recursive: true })
+	.filter((name) => /\.(ts|tsx)$/.test(name))
+	.map((name) => [name, stripComments(readFileSync(new URL(name, sourceDir), "utf8"))]);
+const source = sources.map(([, text]) => text).join("\n");
+const built = (name) => readFileSync(new URL(name, builtDir), "utf8");
 
-test("the page script never writes HTML or runs strings as code", () => {
+test("the page source never writes HTML or runs strings as code", () => {
+	assert.ok(sources.length >= 5, "the page's sources were found");
 	for (const sink of [
+		/dangerouslySetInnerHTML/,
 		/\.innerHTML\b/,
 		/\.outerHTML\b/,
 		/insertAdjacentHTML/,
@@ -27,23 +35,44 @@ test("the page script never writes HTML or runs strings as code", () => {
 		/DOMParser/,
 		/createContextualFragment/,
 		/\.srcdoc\b/,
+		/\bstyle=\{/,
 	]) {
-		assert.doesNotMatch(script, sink, String(sink));
+		assert.doesNotMatch(source, sink, String(sink));
 	}
 });
 
-test("the token is kept in sessionStorage only, never localStorage, a cookie or the URL", () => {
-	assert.match(script, /sessionStorage\.setItem/);
-	assert.doesNotMatch(script, /localStorage|document\.cookie|indexedDB/);
-	assert.doesNotMatch(script, /[?&]token=|location\.(search|href)\s*=/);
-	assert.match(script, /Authorization: `Bearer \$\{viewer\.token\}`/);
+test("the built script has no eval or Function constructor and loads nothing from elsewhere", () => {
+	const script = built("app.js");
+	assert.doesNotMatch(script, /\beval\s*\(/);
+	assert.doesNotMatch(script, /\bnew\s+Function\b|\bFunction\s*\(/);
+	assert.doesNotMatch(script, /\bimport\s*\(/);
+	// The only absolute URLs Preact carries are the SVG, XHTML and MathML namespace names.
+	for (const url of script.match(/https?:\/\/[^\s"'`)]+/g) ?? []) {
+		assert.match(url, /^http:\/\/www\.w3\.org\//, url);
+	}
+	assert.doesNotMatch(built("app.css"), /url\(|@import|https?:/);
 });
 
-test("the HTML has no inline script, style or event handlers for the CSP to refuse", () => {
+test("Vite emits exactly the three files the server serves", () => {
+	assert.deepEqual(readdirSync(builtDir).sort(), ["app.css", "app.js", "index.html"]);
+});
+
+test("the token is kept in sessionStorage only, never localStorage, a cookie or the URL", () => {
+	assert.match(source, /sessionStorage\.setItem/);
+	assert.doesNotMatch(source, /localStorage|document\.cookie|indexedDB/);
+	assert.doesNotMatch(source, /[?&]token=|location\.(search|href)\s*=/);
+	assert.match(source, /Authorization: `Bearer \$\{viewer\.token\}`/);
+	assert.doesNotMatch(built("app.js"), /localStorage|document\.cookie|indexedDB/);
+});
+
+test("the built HTML has no inline script, style or event handlers for the CSP to refuse", () => {
+	const html = built("index.html");
+	assert.match(html, /<script type="module" crossorigin src="\/app\/app\.js"><\/script>/);
+	assert.match(html, /<link rel="stylesheet" crossorigin href="\/app\/app\.css">/);
 	assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)[^>]*>/);
 	assert.doesNotMatch(html, /<style|style="/);
 	assert.doesNotMatch(html, /\son[a-z]+=/);
-	assert.doesNotMatch(html, /https?:\/\//);
+	assert.doesNotMatch(html, /https?:\/\/|data:/);
 });
 
 test("the core handler both hosts share serves /app and its files with the security headers", async () => {

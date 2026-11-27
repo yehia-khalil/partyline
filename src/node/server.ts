@@ -60,7 +60,8 @@ const log = new RoomLog({
 	all: <Row>(query: string, ...params: SqlValue[]) => db.prepare(query).all(...params) as Row[],
 });
 
-const webFile = (name: string) => readFileSync(new URL(`../web/${name}`, import.meta.url), "utf8");
+// The people's page as Vite builds it from src/web (npm run build).
+const webFile = (name: string) => readFileSync(new URL(`../../dist/web/${name}`, import.meta.url), "utf8");
 const assets: WebAssets = { html: webFile("index.html"), css: webFile("app.css"), script: webFile("app.js") };
 
 const listeners = new Map<string, Set<WebSocket>>();

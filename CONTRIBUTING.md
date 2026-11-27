@@ -20,7 +20,8 @@ Requires Node 22+ and, for the Docker image, Docker.
 git clone https://github.com/yehia-khalil/partyline.git && cd partyline
 npm ci
 npm run check     # type-check both deployment targets
-npm test          # guard hook tests, plus server tests against a server it starts
+npm test          # builds the web page, then guard hook tests and server tests against a server it starts
+npm run build     # builds the people's page (src/web, Preact + Vite) into dist/web
 npm run format    # format with Prettier; CI checks it
 ```
 

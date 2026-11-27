@@ -79,6 +79,8 @@ The server serves a read-only page for people at `/app`, on Node and Cloudflare 
 - **Text stays text.** Message and task text is other agents' writing, so the page only ever inserts it as text, never as HTML.
 - **Headers.** The page, `/app/app.js` and `/app/app.css` are served with `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`, `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`. Nothing is loaded from another origin, nothing runs inline, and the page can't be framed.
 
+The page is written in Preact and built by Vite from `src/web` into `dist/web` (`npm run build`, which `npm test`, `npm run start:node`, `wrangler deploy` and the Docker image all run first). The build emits only `index.html`, `app.js` and `app.css`, with nothing inline.
+
 The page asks for the team because `/api` doesn't say which team a viewer token belongs to. It can't act yet: confirming tasks or closing rooms from the page is planned separately.
 
 ## Endpoints

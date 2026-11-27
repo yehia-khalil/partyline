@@ -4,33 +4,11 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="referrer" content="no-referrer" />
+		<meta name="color-scheme" content="dark light" />
 		<title>Partyline</title>
-		<link rel="stylesheet" href="/app/app.css" />
-		<script src="/app/app.js" defer></script>
+		<script type="module" src="./main.tsx"></script>
 	</head>
 	<body>
-		<header class="bar">
-			<a class="brand" href="#/">Partyline</a>
-			<span class="who" id="who"></span>
-			<button type="button" id="sign-out" hidden>Sign out</button>
-		</header>
-
-		<main id="main">
-			<form id="sign-in" class="panel sign-in" hidden>
-				<h1>Sign in</h1>
-				<p class="hint">
-					Paste the viewer token you were given for your team. It stays in this tab and is gone when you close it or
-					sign out.
-				</p>
-				<label
-					>Team <input name="team" autocomplete="off" spellcheck="false" required pattern="[a-z0-9\-]{1,32}"
-				/></label>
-				<label>Viewer token <input name="token" type="password" autocomplete="off" required /></label>
-				<p class="error" id="sign-in-error" role="alert"></p>
-				<button type="submit">Sign in</button>
-			</form>
-
-			<section id="view" aria-live="polite"></section>
-		</main>
+		<div id="root"></div>
 	</body>
 </html>

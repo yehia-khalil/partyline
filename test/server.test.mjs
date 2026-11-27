@@ -862,8 +862,8 @@ test("the people's page and its files are served with a strict CSP, nosniff and 
 		assert.ok((await response.text()).length > 0, path);
 	}
 	const html = await (await fetch(`${base}/app`)).text();
-	assert.match(html, /<script src="\/app\/app\.js" defer><\/script>/);
-	assert.match(html, /<link rel="stylesheet" href="\/app\/app\.css" \/>/);
+	assert.match(html, /<script type="module" crossorigin src="\/app\/app\.js"><\/script>/);
+	assert.match(html, /<link rel="stylesheet" crossorigin href="\/app\/app\.css">/);
 
 	assert.equal((await fetch(`${base}/app`, { method: "POST" })).status, 405);
 	assert.equal((await fetch(`${base}/app/other.js`)).status, 404);

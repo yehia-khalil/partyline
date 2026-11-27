@@ -1,7 +1,7 @@
 /**
  * The people's web page at /app: one static page, its script and its stylesheet, served the same
  * way on every host. The page holds no data; it signs in with a viewer token and reads the people
- * API from the browser. The host supplies the files' text, read from src/web.
+ * API from the browser. Vite builds the files from src/web into dist/web; the host supplies their text.
  */
 
 export type WebAssets = { html: string; css: string; script: string };

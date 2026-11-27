@@ -1,5 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
-import { formatCatchUp, formatClosed, formatPush, matchSocketPath, parseExpiryDays } from "../core/app.ts";
+import {
+	describeRoom,
+	formatCatchUp,
+	formatClosed,
+	formatPush,
+	matchSocketPath,
+	parseExpiryDays,
+	type RoomDetail,
+} from "../core/app.ts";
 import { type Message, type NewTask, RoomLog, type Task, type TaskChange, type TaskEvent } from "../core/room-log.ts";
 
 /**
@@ -159,6 +167,16 @@ export class Room extends DurableObject<Env> {
 		await this.ensureExpiry();
 
 		return this.log.getTask(this.key, number);
+	}
+
+	/** The room in detail; its open WebSockets are its connected streams. */
+	async describe(): Promise<RoomDetail | null> {
+		if (!this.log.exists(this.key)) {
+			return null;
+		}
+		await this.ensureExpiry();
+
+		return describeRoom(this.log, this.key, this.expiryDays, this.ctx.getWebSockets().length);
 	}
 
 	/** Named closeRoom, not close, to stay clear of any name the runtime gives special meaning. */

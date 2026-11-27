@@ -38,6 +38,8 @@ export type Task = {
 	/** True while any task it waits for is not confirmed. A blocked task can be claimed, not marked done. */
 	blocked: boolean;
 };
+/** Someone who posted in a room or took a step on its board, with the times of their first and latest action. */
+export type Participant = { name: string; firstSeen: string; lastSeen: string };
 export type TaskEvent = { seq: number; at: string; actor: string; action: string; detail: string | null };
 export type NewTask = { title: string; doneWhen?: string; priority?: Priority; due?: string; waitsFor?: number[] };
 export type TaskChange =
@@ -252,6 +254,26 @@ export class RoomLog {
 			.map(({ status, due }) => ({ status, due }));
 
 		return { ...row, lastSeq: this.lastSeq(room), counts, dues };
+	}
+
+	/**
+	 * Everyone who posted in the room (among its kept messages) or took a step on its board, earliest
+	 * first. The board itself is not a participant.
+	 */
+	participants(room: string): Participant[] {
+		this.assertExists(room);
+
+		return this.sql.all<Participant>(
+			`SELECT name, MIN(at) AS firstSeen, MAX(at) AS lastSeen FROM (
+				SELECT sender AS name, at FROM room_messages WHERE room = ? AND sender != ?
+				UNION ALL
+				SELECT actor AS name, at FROM room_task_events WHERE room = ? AND actor != ?
+			) GROUP BY name ORDER BY firstSeen, name`,
+			room,
+			BOARD_SENDER,
+			room,
+			BOARD_SENDER,
+		);
 	}
 
 	/** Removes a room, its messages and its board. */

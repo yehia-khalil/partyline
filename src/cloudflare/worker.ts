@@ -20,6 +20,7 @@ function roomsOn(env: Env): Rooms {
 		updateTask: (team, roomId, actor, number, change) => room(env, team, roomId).updateTask(actor, number, change),
 		listTasks: (team, roomId, includeConfirmed) => room(env, team, roomId).listTasks(includeConfirmed),
 		getTask: (team, roomId, number) => room(env, team, roomId).getTask(number),
+		describeRoom: (team, roomId) => room(env, team, roomId).describe(),
 		listRooms: (team) => env.TEAM_INDEX.get(env.TEAM_INDEX.idFromName(team)).list(),
 	};
 }

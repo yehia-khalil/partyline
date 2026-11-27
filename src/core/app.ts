@@ -4,11 +4,13 @@
  */
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { apiError, handleApi } from "./api.ts";
 import {
 	expiryFrom,
 	isOverdue,
 	MAX_WAITS_FOR,
 	type Message,
+	type Participant,
 	type NewTask,
 	type Priority,
 	RoomError,
@@ -36,10 +38,18 @@ export interface Rooms {
 	getTask(team: string, roomId: string, number: number): Promise<{ task: Task; events: TaskEvent[]; earlier: number }>;
 	/** The team's rooms that have not expired, latest activity first. Holds no message or task text. */
 	listRooms(team: string): Promise<RoomEntry[]>;
+	/** The room's list entry, who has taken part in it, and how many streams it has open; null if it doesn't exist or has expired. */
+	describeRoom(team: string, roomId: string): Promise<RoomDetail | null>;
 }
 
 /** One room in a team's room list. Task counts mean what the board shows: overdue and blocked as list_tasks marks them. */
 export type RoomEntry = { id: string } & ReturnType<typeof withOverdue>;
+
+/**
+ * One room in detail. Streams are not tied to a member, so the room reports how many are open
+ * rather than who has one open.
+ */
+export type RoomDetail = RoomEntry & { participants: Participant[]; connectedCount: number };
 
 export const DEFAULT_EXPIRY_DAYS = 30;
 
@@ -69,7 +79,8 @@ export type Member = { team: string; name: string };
 /** A member is an agent that uses /mcp; a viewer is a person who only reads, through the people API. */
 export type Role = "member" | "viewer";
 export type Identity = Member & { role: Role };
-type Credential = Identity & { token: string };
+/** owner: the person whose agent a member is, when TEAMS names one; always null for a viewer. */
+export type Credential = Identity & { token: string; owner: string | null };
 const SOCKET_PATH = /^\/t\/([a-z0-9-]{1,32})\/rooms\/([0-9a-f]{32})\/ws$/;
 
 /** Every read reply starts with this marker, which the local guard hook uses to recognise a room server. */
@@ -109,6 +120,22 @@ export function listTeamRooms(log: RoomLog, team: string, expiryDays: number, no
 		.map((key) => ({ id: key.slice(prefix.length), summary: log.summary(key) }));
 
 	return roomList(rooms, expiryDays, now);
+}
+
+/** A room of a log in detail, as `describeRoom` reports it, or null once it is gone or past its expiry. */
+export function describeRoom(
+	log: RoomLog,
+	key: string,
+	expiryDays: number,
+	connectedCount: number,
+	now = new Date(),
+): RoomDetail | null {
+	if (!log.exists(key)) {
+		return null;
+	}
+	const [entry] = roomList([{ id: key.slice(key.indexOf(":") + 1), summary: log.summary(key) }], expiryDays, now);
+
+	return entry ? { ...entry, participants: log.participants(key), connectedCount } : null;
 }
 
 /** The storage key of a team's room: one team can never reach another team's rooms. */
@@ -527,8 +554,9 @@ This room is closed.`
  * Reads the TEAMS setting: team name to its members and viewers, each a name mapped to a token,
  * e.g. {"core": {"members": {"alice-claude": "<token>"}, "viewers": {"alice": "<token>"}}}.
  * A team written as a plain name-to-token object, {"core": {"alice-claude": "<token>"}}, has
- * members only. Throws on anything malformed, including a token used twice or a viewer named
- * like a member of the same team, so a bad setting fails closed and says why.
+ * members only. In the grouped shape a member may also be written as {"token": "<token>", "owner": "alice"},
+ * naming the person whose agent it is. Throws on anything malformed, including a token used twice
+ * or a viewer named like a member of the same team, so a bad setting fails closed and says why.
  */
 export function parseTeams(teamsJson: string | undefined): Credential[] {
 	let parsed: unknown;
@@ -569,11 +597,28 @@ export function parseTeams(teamsJson: string | undefined): Credential[] {
 			if (!isObject(names)) {
 				throw new Error(`TEAMS: the ${role}s of team "${team}" must map names to tokens.`);
 			}
-			for (const [name, token] of Object.entries(names)) {
+			for (const [name, value] of Object.entries(names)) {
 				if (!MEMBER_NAME.test(name)) {
 					throw new Error(
 						`TEAMS: ${role} "${team}/${name}" must be a-z, 0-9, dot, dash or underscore, up to 40 characters.`,
 					);
+				}
+				let token = value;
+				let owner: string | null = null;
+				if (grouped && role === "member" && isObject(value)) {
+					const unknown = Object.keys(value).find((key) => key !== "token" && key !== "owner");
+					if (unknown !== undefined) {
+						throw new Error(`TEAMS: member "${team}/${name}" may only have "token" and "owner", not "${unknown}".`);
+					}
+					token = value.token;
+					if (value.owner !== undefined) {
+						if (typeof value.owner !== "string" || !MEMBER_NAME.test(value.owner)) {
+							throw new Error(
+								`TEAMS: the owner of "${team}/${name}" must be a-z, 0-9, dot, dash or underscore, up to 40 characters.`,
+							);
+						}
+						owner = value.owner;
+					}
 				}
 				if (typeof token !== "string" || token.length < MIN_TOKEN_LENGTH) {
 					throw new Error(`TEAMS: the token of "${team}/${name}" must be at least ${MIN_TOKEN_LENGTH} characters.`);
@@ -584,7 +629,7 @@ export function parseTeams(teamsJson: string | undefined): Credential[] {
 				if (credentials.some((other) => other.team === team && other.name === name)) {
 					throw new Error(`TEAMS: viewer "${team}/${name}" has the same name as a member of the team.`);
 				}
-				credentials.push({ team, name, role, token });
+				credentials.push({ team, name, role, token, owner });
 			}
 		}
 	}
@@ -636,8 +681,8 @@ export async function identify(request: Request, credentials: Credential[]): Pro
 }
 
 /**
- * Serves the MCP endpoint and the root page. Returns null for anything else, so the host
- * can handle room streams (WebSocket upgrades differ per host) and its own 404.
+ * Serves the MCP endpoint, the people API and the root page. Returns null for anything else, so
+ * the host can handle room streams (WebSocket upgrades differ per host) and its own 404.
  */
 export async function handleRequest(
 	request: Request,
@@ -646,14 +691,18 @@ export async function handleRequest(
 	origin: string,
 ): Promise<Response | null> {
 	const url = new URL(request.url);
+	const isApi = url.pathname === "/api" || url.pathname.startsWith("/api/");
 
-	if (url.pathname === "/mcp") {
+	if (url.pathname === "/mcp" || isApi) {
 		let credentials: Credential[];
 		try {
 			credentials = parseTeams(teamsJson);
 		} catch (error) {
 			console.error(`partyline: ${(error as Error).message}`);
-			return new Response("Server misconfigured", { status: 500 });
+			return isApi ? apiError(500, "Server misconfigured.") : new Response("Server misconfigured", { status: 500 });
+		}
+		if (isApi) {
+			return handleApi(request, url, rooms, credentials);
 		}
 		const caller = await identify(request, credentials);
 		if (!caller) {
@@ -672,7 +721,7 @@ export async function handleRequest(
 	}
 
 	if (url.pathname === "/") {
-		return new Response("partyline: MCP at /mcp, room streams at /t/<team>/rooms/<id>/ws\n");
+		return new Response("partyline: MCP at /mcp, the people API at /api, room streams at /t/<team>/rooms/<id>/ws\n");
 	}
 
 	return null;

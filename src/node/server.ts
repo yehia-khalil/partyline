@@ -18,6 +18,7 @@ import { Readable } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
 import { type WebSocket, WebSocketServer } from "ws";
 import {
+	describeRoom,
 	formatCatchUp,
 	formatClosed,
 	formatPush,
@@ -144,6 +145,11 @@ const rooms: Rooms = {
 	},
 	async listRooms(team) {
 		return listTeamRooms(log, team, expiryDays);
+	},
+	async describeRoom(team, roomId) {
+		const key = roomKey(team, roomId);
+
+		return describeRoom(log, key, expiryDays, listeners.get(key)?.size ?? 0);
 	},
 };
 

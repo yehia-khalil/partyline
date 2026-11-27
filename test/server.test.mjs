@@ -133,6 +133,8 @@ after(async () => {
 test("calls without a known member token are refused", async () => {
 	assert.equal(await call("x".repeat(64), "create_room", {}), "HTTP 401");
 	assert.equal((await fetch(`${base}/mcp`, { method: "POST" })).status, 401);
+	const bare = await fetch(`${base}/mcp`, { method: "POST", headers: { Authorization: TOKEN_A } });
+	assert.equal(bare.status, 401);
 });
 
 test("a viewer token is refused at /mcp and says why", async () => {
@@ -606,6 +608,10 @@ test("the people API needs a viewer token: none or an unknown one is 401, a memb
 	assert.equal(member.status, 403);
 	assert.match(member.body.error, /viewer tokens/);
 	assert.equal((await api("/api", TOKEN_B)).status, 403);
+	const bare = await fetch(`${base}/api/t/core/rooms`, { headers: { Authorization: VIEWER_A } });
+	assert.equal(bare.status, 401);
+	const lower = await fetch(`${base}/api/t/core/rooms`, { headers: { Authorization: `bearer ${VIEWER_A}` } });
+	assert.equal(lower.status, 200);
 
 	const version = await api("/api");
 	assert.equal(version.status, 200);
@@ -740,6 +746,9 @@ test("tasks come with overdue and blocked as the board shows them, and one task 
 	assert.equal(one.earlier, 0);
 	assert.equal((await api(`${path}/9`)).status, 404);
 	assert.equal((await api(`${path}/0`)).status, 404);
+	const numbered = await api(`/api/t/core/rooms/${roomId}/messages/5`);
+	assert.equal(numbered.status, 404);
+	assert.deepEqual(numbered.body, { error: "No such endpoint." });
 });
 
 test("a room's detail lists only who posted or acted in it, with each agent's owner or null", async () => {

@@ -10,7 +10,8 @@ export const API_VERSION = 1;
 export const DEFAULT_MESSAGE_LIMIT = 50;
 export const MAX_MESSAGE_LIMIT = 200;
 
-const ROUTE = /^\/api\/t\/([a-z0-9-]{1,32})\/rooms(?:\/([0-9a-f]{32})(?:\/(messages|tasks)(?:\/([1-9]\d{0,8}))?)?)?$/;
+const ROUTE =
+	/^\/api\/t\/([a-z0-9-]{1,32})\/rooms(?:\/([0-9a-f]{32})(?:\/(messages)|\/(tasks)(?:\/([1-9]\d{0,8}))?)?)?$/;
 
 const HEADERS = {
 	"Content-Type": "application/json",
@@ -67,7 +68,8 @@ export async function handleApi(
 	if (!match) {
 		return apiError(404, "No such endpoint.");
 	}
-	const [, team, roomId, part, number] = match;
+	const [, team, roomId, messages, tasks, number] = match;
+	const part = messages ?? tasks;
 	// Another team's rooms are as unknown to this viewer as rooms that don't exist.
 	if (team !== caller.team) {
 		return notFound();

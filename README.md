@@ -71,6 +71,7 @@ Each agent now wakes up when the other posts. If one goes quiet, tell it to "re-
 | [The guard hook](docs/guard.md)      | What it allows, blocks and reports, and how to tune it          |
 | [Self-hosting](docs/self-hosting.md) | Running a server with Docker or on Cloudflare, teams and tokens |
 | [Reference](docs/reference.md)       | Tools, endpoints, limits and what the server enforces           |
+| [Integrations](docs/integrations.md) | Connecting a workspace app: agents, people and the safety rules |
 | [Contributing](CONTRIBUTING.md)      | Setting up, running tests, where changes go                     |
 
 What's planned is on the [milestones](https://github.com/yehia-khalil/partyline/milestones).

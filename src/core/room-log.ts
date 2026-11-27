@@ -15,6 +15,7 @@ export interface Sql {
 export const MAX_MESSAGES_PER_MINUTE = 30;
 export const KEPT_MESSAGES = 1000;
 export const MAX_TASKS = 200;
+export const MAX_WAITS_FOR = 10;
 
 /** The sender of the messages a room's board posts. Member names can't contain brackets, so no one can post as it. */
 export const BOARD_SENDER = "[board]";
@@ -32,9 +33,13 @@ export type Task = {
 	status: TaskStatus;
 	createdAt: string;
 	updatedAt: string;
+	/** The tasks this one waits for, by number. */
+	waitsFor: number[];
+	/** True while any task it waits for is not confirmed. A blocked task can be claimed, not marked done. */
+	blocked: boolean;
 };
 export type TaskEvent = { seq: number; at: string; actor: string; action: string; detail: string | null };
-export type NewTask = { title: string; doneWhen?: string; priority?: Priority; due?: string };
+export type NewTask = { title: string; doneWhen?: string; priority?: Priority; due?: string; waitsFor?: number[] };
 export type TaskChange =
 	| { action: "claim" }
 	| { action: "release" }
@@ -48,7 +53,8 @@ export type TaskChange =
 	| { action: "hand_off"; to: string }
 	| { action: "send_back"; reason: string; members: string[] }
 	| { action: "reclaim"; members: string[] }
-	| { action: "edit"; priority?: Priority; due?: string | null; members: string[] };
+	/** waitsFor replaces the list of tasks this one waits for; [] clears it. */
+	| { action: "edit"; priority?: Priority; due?: string | null; waitsFor?: number[]; members: string[] };
 
 const TASK_COLUMNS = `number, title, done_when AS doneWhen, priority, due, created_by AS createdBy, holder, status,
 	created_at AS createdAt, updated_at AS updatedAt`;
@@ -118,6 +124,16 @@ export class RoomLog {
 				PRIMARY KEY (room, number, seq)
 			)`,
 		);
+		// Which task waits for which. Rooms made before dependencies have no rows here, so their
+		// tasks wait for nothing; older versions never read the table, so rolling back is safe.
+		this.sql.all(
+			`CREATE TABLE IF NOT EXISTS room_task_waits (
+				room TEXT NOT NULL,
+				number INTEGER NOT NULL,
+				waits_for INTEGER NOT NULL,
+				PRIMARY KEY (room, number, waits_for)
+			)`,
+		);
 	}
 
 	open(room: string): void {
@@ -175,6 +191,7 @@ export class RoomLog {
 
 	/** Removes a room, its messages and its board. */
 	delete(room: string): void {
+		this.sql.all("DELETE FROM room_task_waits WHERE room = ?", room);
 		this.sql.all("DELETE FROM room_task_events WHERE room = ?", room);
 		this.sql.all("DELETE FROM room_tasks WHERE room = ?", room);
 		this.sql.all("DELETE FROM room_messages WHERE room = ?", room);
@@ -235,6 +252,7 @@ export class RoomLog {
 		if (count >= MAX_TASKS) {
 			throw new RoomError(`This room's board is full: a room holds at most ${MAX_TASKS} tasks.`);
 		}
+		const waitsFor = this.checkWaitsFor(room, next, task.waitsFor ?? []);
 
 		const message = this.post(room, BOARD_SENDER, `task #${next} added by ${actor}`);
 		this.sql.all(
@@ -250,6 +268,7 @@ export class RoomLog {
 			message.at,
 			message.at,
 		);
+		this.setWaitsFor(room, next, waitsFor);
 		this.recordEvent(room, next, message.at, actor, "add", null);
 
 		return { task: this.loadTask(room, next), message };
@@ -258,9 +277,10 @@ export class RoomLog {
 	/**
 	 * Applies one step to a task, if the actor may take it from the task's current status.
 	 * Every step but edit posts a board line first, so a refused post (closed room, rate limit)
-	 * leaves the task unchanged.
+	 * leaves the task unchanged. A confirm also posts "task #n unblocked" for each task it was the
+	 * last thing blocking; the room's rate limit is checked for all of those lines up front.
 	 */
-	updateTask(room: string, actor: string, number: number, change: TaskChange): { task: Task; message: Message | null } {
+	updateTask(room: string, actor: string, number: number, change: TaskChange): { task: Task; messages: Message[] } {
 		this.assertBoardWritable(room);
 		const task = this.loadTask(room, number);
 		const holderOnly = () => {
@@ -288,6 +308,9 @@ export class RoomLog {
 		let next: { status: TaskStatus; holder: string | null };
 		let line: string | null;
 		let detail: string | null = null;
+		let waitsFor: number[] | null = null;
+		// Tasks this confirm unblocks: those still waiting whose only unconfirmed wait is this task.
+		const unblocks = change.action === "confirm" ? this.unblockedByConfirming(room, number) : [];
 		switch (change.action) {
 			case "claim":
 				if (task.status === "claimed") {
@@ -315,6 +338,12 @@ export class RoomLog {
 				break;
 			case "done":
 				holderOnly();
+				if (task.blocked) {
+					const pending = this.unconfirmedWaits(room, number).map((n) => `#${n}`);
+					throw new RoomError(
+						`Task #${number} is blocked: it waits for ${pending.join(", ")}, not confirmed yet. It can be marked done once they are.`,
+					);
+				}
 				next = { status: "done", holder: actor };
 				line = `task #${number} marked done by ${actor}`;
 				break;
@@ -350,14 +379,18 @@ export class RoomLog {
 				if (actor !== task.holder && !actsAsCreator(change.members)) {
 					throw new RoomError(`Only the creator or the holder of task #${number} can change it.`);
 				}
+				if (change.waitsFor !== undefined) {
+					if (task.status === "done") {
+						throw new RoomError(`Task #${number} is marked done, so what it waits for can no longer change.`);
+					}
+					waitsFor = this.checkWaitsFor(room, number, change.waitsFor);
+				}
 				next = { status: task.status, holder: task.holder };
 				line = null;
 				break;
 		}
 
-		if (line === null) {
-			this.assertRate(room);
-		}
+		this.assertRate(room, 1 + unblocks.length);
 		const message = line === null ? null : this.post(room, BOARD_SENDER, line);
 		const at = message?.at ?? new Date().toISOString();
 		const priority = change.action === "edit" && change.priority !== undefined ? change.priority : task.priority;
@@ -372,22 +405,34 @@ export class RoomLog {
 			room,
 			number,
 		);
+		if (waitsFor !== null) {
+			this.setWaitsFor(room, number, waitsFor);
+		}
 		this.recordEvent(room, number, at, actor, change.action, detail);
 
-		return { task: this.loadTask(room, number), message };
+		const messages = message === null ? [] : [message];
+		for (const unblocked of unblocks) {
+			const line = this.post(room, BOARD_SENDER, `task #${unblocked} unblocked`);
+			this.recordEvent(room, unblocked, line.at, actor, "unblocked", `#${number} confirmed`);
+			messages.push(line);
+		}
+
+		return { task: this.loadTask(room, number), messages };
 	}
 
 	/** The board: open, claimed, done, then (if asked) confirmed; each by priority, high first, then number. */
 	listTasks(room: string, includeConfirmed: boolean): Task[] {
 		this.assertExists(room);
 
-		return this.sql.all<Task>(
+		const tasks = this.sql.all<Task>(
 			`SELECT ${TASK_COLUMNS} FROM room_tasks WHERE room = ? ${includeConfirmed ? "" : "AND status != 'confirmed'"}
 			ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'claimed' THEN 1 WHEN 'done' THEN 2 ELSE 3 END,
 				CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,
 				number`,
 			room,
 		);
+
+		return this.withWaits(room, tasks);
 	}
 
 	/** One task and its last `limit` steps, oldest first, with how many earlier steps are not included. */
@@ -421,7 +466,105 @@ export class RoomLog {
 			throw new RoomError(`No task #${number} in this room.`);
 		}
 
-		return task;
+		return this.withWaits(room, [task])[0];
+	}
+
+	/** Fills in waitsFor and blocked, reading the room's waits once. */
+	private withWaits(room: string, tasks: Task[]): Task[] {
+		const rows = this.sql.all<{ number: number; waitsFor: number; status: TaskStatus }>(
+			`SELECT w.number, w.waits_for AS waitsFor, t.status FROM room_task_waits w
+			JOIN room_tasks t ON t.room = w.room AND t.number = w.waits_for
+			WHERE w.room = ? ORDER BY w.number, w.waits_for`,
+			room,
+		);
+		for (const task of tasks) {
+			const waits = rows.filter((row) => row.number === task.number);
+			task.waitsFor = waits.map((row) => row.waitsFor);
+			task.blocked = waits.some((row) => row.status !== "confirmed");
+		}
+
+		return tasks;
+	}
+
+	/** The numbers of the tasks a task waits for that are not confirmed yet. */
+	private unconfirmedWaits(room: string, number: number): number[] {
+		return this.sql
+			.all<{ waitsFor: number }>(
+				`SELECT w.waits_for AS waitsFor FROM room_task_waits w
+				JOIN room_tasks t ON t.room = w.room AND t.number = w.waits_for
+				WHERE w.room = ? AND w.number = ? AND t.status != 'confirmed' ORDER BY w.waits_for`,
+				room,
+				number,
+			)
+			.map((row) => row.waitsFor);
+	}
+
+	/** The tasks that wait for `number` and for nothing else unconfirmed, so confirming it unblocks them. */
+	private unblockedByConfirming(room: string, number: number): number[] {
+		return this.sql
+			.all<{ number: number }>(
+				`SELECT w.number FROM room_task_waits w
+				JOIN room_tasks t ON t.room = w.room AND t.number = w.number
+				WHERE w.room = ? AND w.waits_for = ? AND t.status != 'confirmed'
+				AND NOT EXISTS (
+					SELECT 1 FROM room_task_waits o JOIN room_tasks ot ON ot.room = o.room AND ot.number = o.waits_for
+					WHERE o.room = w.room AND o.number = w.number AND o.waits_for != ? AND ot.status != 'confirmed'
+				)
+				ORDER BY w.number`,
+				room,
+				number,
+				number,
+			)
+			.map((row) => row.number);
+	}
+
+	/**
+	 * Checks a list of tasks for `number` to wait for: at most MAX_WAITS_FOR, each one on this
+	 * room's board, none of them the task itself, and none that already waits (directly or not)
+	 * for this task, which would make a loop. Returns the list without repeats.
+	 */
+	private checkWaitsFor(room: string, number: number, waitsFor: number[]): number[] {
+		const unique = [...new Set(waitsFor)].sort((a, b) => a - b);
+		if (unique.length > MAX_WAITS_FOR) {
+			throw new RoomError(`A task can wait for at most ${MAX_WAITS_FOR} other tasks.`);
+		}
+		const edges = this.sql.all<{ number: number; waitsFor: number }>(
+			"SELECT number, waits_for AS waitsFor FROM room_task_waits WHERE room = ? AND number != ?",
+			room,
+			number,
+		);
+		for (const other of unique) {
+			if (this.sql.all("SELECT 1 FROM room_tasks WHERE room = ? AND number = ?", room, other).length === 0) {
+				throw new RoomError(`No task #${other} in this room: a task can only wait for tasks on the same board.`);
+			}
+			if (other === number) {
+				throw new RoomError(`Task #${number} can't wait for itself.`);
+			}
+			// Walk what `other` waits for; reaching `number` means the new wait closes a loop.
+			const seen = new Set<number>();
+			const stack = [other];
+			while (stack.length > 0) {
+				const at = stack.pop()!;
+				if (at === number) {
+					throw new RoomError(
+						`Task #${number} can't wait for #${other}: that would make a loop, as #${other} already waits for #${number}.`,
+					);
+				}
+				if (!seen.has(at)) {
+					seen.add(at);
+					stack.push(...edges.filter((edge) => edge.number === at).map((edge) => edge.waitsFor));
+				}
+			}
+		}
+
+		return unique;
+	}
+
+	private setWaitsFor(room: string, number: number, waitsFor: number[]): void {
+		this.sql.all("DELETE FROM room_task_waits WHERE room = ? AND number = ?", room, number);
+		for (const other of waitsFor) {
+			this.sql.all("INSERT INTO room_task_waits (room, number, waits_for) VALUES (?, ?, ?)", room, number, other);
+		}
 	}
 
 	private recordEvent(
@@ -446,8 +589,11 @@ export class RoomLog {
 		);
 	}
 
-	/** Messages (board lines included) and task edits share the room's per-minute limit. */
-	private assertRate(room: string): void {
+	/**
+	 * Refuses when `count` more messages or edits would go over the room's per-minute limit.
+	 * Messages (board lines included) and task edits share it.
+	 */
+	private assertRate(room: string, count = 1): void {
 		const minuteAgo = new Date(Date.now() - 60_000).toISOString();
 		const [{ n }] = this.sql.all<{ n: number }>(
 			`SELECT (SELECT COUNT(*) FROM room_messages WHERE room = ? AND at > ?)
@@ -457,7 +603,7 @@ export class RoomLog {
 			room,
 			minuteAgo,
 		);
-		if (n >= MAX_MESSAGES_PER_MINUTE) {
+		if (n + count > MAX_MESSAGES_PER_MINUTE) {
 			throw new RoomError(
 				`Room limit reached: ${MAX_MESSAGES_PER_MINUTE} messages a minute. Wait, and check with your operator before continuing.`,
 			);

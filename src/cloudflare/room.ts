@@ -102,8 +102,8 @@ export class Room extends DurableObject<Env> {
 	}
 
 	async updateTask(actor: string, number: number, change: TaskChange): Promise<Task> {
-		const { task, message } = this.log.updateTask(this.key, actor, number, change);
-		if (message) {
+		const { task, messages } = this.log.updateTask(this.key, actor, number, change);
+		for (const message of messages) {
 			this.send(formatPush(this.roomId, message));
 		}
 		await this.scheduleExpiry();

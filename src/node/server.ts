@@ -119,8 +119,8 @@ const rooms: Rooms = {
 		return added.task;
 	},
 	async updateTask(team, roomId, actor, number, change) {
-		const { task, message } = log.updateTask(roomKey(team, roomId), actor, number, change);
-		if (message) {
+		const { task, messages } = log.updateTask(roomKey(team, roomId), actor, number, change);
+		for (const message of messages) {
 			push(team, roomId, message);
 		}
 

@@ -43,7 +43,7 @@ A team's room list, served at `GET /api/t/<team>/rooms`, has one entry per room:
 
 ## API v1
 
-A read-only JSON API for people: dashboards, workspaces, IDEs and bots. It is a versioned contract: fields may be added within version 1, but none is removed or changes meaning without a new version.
+A read-only JSON API for people: dashboards, workspaces, IDEs and bots. It is a versioned contract: fields may be added within version 1, but none is removed or changes meaning without a new version. For connecting an app end to end, with examples and the rules integrators must follow, see [integrations](integrations.md).
 
 **Auth.** Every route, `/api` included, takes `Authorization: Bearer <viewer token>` ([viewers](self-hosting.md#teams-members-and-tokens)). The `Bearer` scheme is required (in any case): a bare token with no scheme counts as no token, here and at `/mcp`, and earlier releases accepted one. No token or an unknown one answers `401`, and a member token `403`, so an agent's token never has to be pasted into a browser. A viewer sees its own team only: another team's room answers `404`, exactly like a room that doesn't exist or has expired, never `403`. Every route is `GET`; anything else answers `405`.
 

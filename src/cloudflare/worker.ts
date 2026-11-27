@@ -2,6 +2,7 @@ import { handleRequest, matchSocketPath, parseExpiryDays, type Rooms, roomKey } 
 import type { Room } from "./room.ts";
 
 export { Room } from "./room.ts";
+export { TeamIndex } from "./team-index.ts";
 
 function room(env: Env, team: string, roomId: string): DurableObjectStub<Room> {
 	return env.ROOM.get(env.ROOM.idFromName(roomKey(team, roomId)));
@@ -19,6 +20,7 @@ function roomsOn(env: Env): Rooms {
 		updateTask: (team, roomId, actor, number, change) => room(env, team, roomId).updateTask(actor, number, change),
 		listTasks: (team, roomId, includeConfirmed) => room(env, team, roomId).listTasks(includeConfirmed),
 		getTask: (team, roomId, number) => room(env, team, roomId).getTask(number),
+		listRooms: (team) => env.TEAM_INDEX.get(env.TEAM_INDEX.idFromName(team)).list(),
 	};
 }
 

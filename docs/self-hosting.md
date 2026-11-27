@@ -43,7 +43,7 @@ printf '%s' '{"core":{"members":{"alice-claude":"<token>"}}}' | npx wrangler sec
 
 `wrangler secret put` replaces the whole secret, so keep the full `TEAMS` value in a password manager and upload all of it each time. Add a custom domain under the Worker's **Settings → Domains & Routes**.
 
-To change how long rooms live, set `ROOM_EXPIRY_DAYS` under `vars` in `wrangler.jsonc` and redeploy. Each room keeps an alarm for its expiry time. Cloudflare can't list rooms, so a room created before v0.5.0 gets its alarm the next time anyone uses it; one that is never used again stays in storage.
+To change how long rooms live, set `ROOM_EXPIRY_DAYS` under `vars` in `wrangler.jsonc` and redeploy. Each room keeps an alarm for its expiry time. Cloudflare can't enumerate Durable Objects, so each team has an index object (`TeamIndex`, bound as `TEAM_INDEX`) that its rooms write to when they open, get a message or a board change, close or expire; that is how a team's rooms are listed. The index holds room IDs, times, sequence numbers and task counts, never message or task text. If a write to it fails, the room's own change still goes through and the room's next write repairs it. A room created before v0.5.0 gets its alarm, and a room created before the index existed joins it, the next time anyone uses it; one that is never used again stays in storage and out of the list.
 
 ## Teams, members and tokens
 

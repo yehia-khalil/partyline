@@ -73,6 +73,42 @@ const LAST_ACTIVITY = `MAX(
 	COALESCE((SELECT MAX(e.at) FROM room_task_events e WHERE e.room = r.room), '')
 )`;
 
+/** True when the board marks a task overdue: open or claimed, with a due day (UTC) before `today` (YYYY-MM-DD). */
+export function isOverdue(task: Pick<Task, "status" | "due">, today: string): boolean {
+	return task.due !== null && task.due < today && (task.status === "open" || task.status === "claimed");
+}
+
+/** When a room expires: `days` after its latest activity. */
+export function expiryFrom(lastActivity: string, days: number): Date {
+	return new Date(Date.parse(lastActivity) + days * DAY_MS);
+}
+
+export type TaskCounts = Record<TaskStatus | "overdue" | "blocked", number>;
+
+/**
+ * What a room list shows about one room, without any message or task text. `dues` holds the
+ * status and due day of each open or claimed task with one, so the overdue count can be worked
+ * out on the day it is read, as the board does, even when nothing has happened in the room since.
+ */
+export type RoomSummary = {
+	opened: string;
+	closed: string | null;
+	lastActivity: string;
+	lastSeq: number;
+	counts: Omit<TaskCounts, "overdue">;
+	dues: Pick<Task, "status" | "due">[];
+};
+
+/** A summarised room as the list shows it on `today`, with the overdue count the board would show. */
+export function withOverdue(
+	summary: RoomSummary,
+	today: string,
+): Omit<RoomSummary, "counts" | "dues"> & { tasks: TaskCounts } {
+	const { counts, dues, ...room } = summary;
+
+	return { ...room, tasks: { ...counts, overdue: dues.filter((task) => isOverdue(task, today)).length } };
+}
+
 export class RoomError extends Error {}
 
 export class RoomLog {
@@ -181,7 +217,7 @@ export class RoomLog {
 			room,
 		);
 
-		return new Date(Date.parse(last) + days * DAY_MS);
+		return expiryFrom(last, days);
 	}
 
 	/** Every room whose expiry time (`days` after its latest activity) is `now` or earlier. */
@@ -196,6 +232,26 @@ export class RoomLog {
 	/** Every room in this log. A Cloudflare room object holds exactly one. */
 	rooms(): string[] {
 		return this.sql.all<{ room: string }>("SELECT room FROM rooms").map((row) => row.room);
+	}
+
+	/** A room's times, latest seq and task counts, for the room list. */
+	summary(room: string): RoomSummary {
+		this.assertExists(room);
+		const [row] = this.sql.all<{ opened: string; closed: string | null; lastActivity: string }>(
+			`SELECT r.opened_at AS opened, r.closed_at AS closed, ${LAST_ACTIVITY} AS lastActivity FROM rooms r WHERE r.room = ?`,
+			room,
+		);
+		const tasks = this.listTasks(room, true);
+		const counts = { open: 0, claimed: 0, done: 0, confirmed: 0, blocked: 0 };
+		for (const task of tasks) {
+			counts[task.status] += 1;
+			counts.blocked += task.blocked ? 1 : 0;
+		}
+		const dues = tasks
+			.filter((task) => task.due !== null && (task.status === "open" || task.status === "claimed"))
+			.map(({ status, due }) => ({ status, due }));
+
+		return { ...row, lastSeq: this.lastSeq(room), counts, dues };
 	}
 
 	/** Removes a room, its messages and its board. */

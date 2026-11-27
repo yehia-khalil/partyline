@@ -1,0 +1,1256 @@
+/* The people's page in Partyline's own look: chunky rounded frames with a hard violet shadow,
+ * squiggles and dot grids. Every value comes from tokens.css. */
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+html {
+	background: var(--bg);
+}
+
+body {
+	margin: 0;
+	min-height: 100vh;
+	color: var(--text);
+	background-color: var(--bg);
+	background-image: radial-gradient(var(--dot) 1.6px, transparent 1.8px);
+	background-size: 24px 24px;
+	font: var(--text-body) / 1.5 var(--font-body);
+	-webkit-font-smoothing: antialiased;
+	/* Its own stacking context, so the twinkle layers (Motion, below) sit between the dot grid and the content. */
+	position: relative;
+	isolation: isolate;
+}
+
+h1,
+h2,
+h3 {
+	font-family: var(--font-display);
+	font-weight: 900;
+	line-height: 1.15;
+	margin: 0;
+}
+
+a {
+	color: var(--link);
+}
+
+code,
+.room-id {
+	font-family: var(--font-mono);
+}
+
+:focus-visible {
+	outline: 3px solid var(--pl-yellow);
+	outline-offset: 3px;
+	border-radius: 6px;
+}
+
+/* ---- Brand marks --------------------------------------------------------------------------- */
+
+.logo-mark {
+	flex: none;
+	display: block;
+}
+
+.logo-mark .mark-shadow {
+	stroke: var(--mark-shadow);
+}
+
+.wordmark {
+	display: inline-flex;
+	font-family: var(--font-display);
+	font-weight: 900;
+	font-size: 1.6rem;
+	letter-spacing: 0.02em;
+	line-height: 1;
+	transform: rotate(-3deg) skewX(-10deg);
+	text-shadow: 3px 3px 0 var(--mark-shadow);
+}
+
+.wordmark-large {
+	font-size: clamp(2.4rem, 8vw, 3.4rem);
+	text-shadow: 4px 4px 0 var(--mark-shadow);
+}
+
+.wordmark-party {
+	color: var(--pl-pink);
+}
+
+.wordmark-line {
+	color: var(--pl-yellow);
+}
+
+.squiggle {
+	display: block;
+	flex: none;
+}
+
+.squiggle-pink path {
+	stroke: var(--pl-pink);
+}
+
+.squiggle-teal path {
+	stroke: var(--pl-teal);
+}
+
+.squiggle-yellow path {
+	stroke: var(--pl-yellow);
+}
+
+.dots {
+	background-image: radial-gradient(var(--text) 2.6px, transparent 3px);
+	background-size: 22px 22px;
+	opacity: 0.9;
+}
+
+/* ---- Frames, buttons, fields --------------------------------------------------------------- */
+
+.frame {
+	background: var(--surface);
+	border: var(--border-frame) solid var(--frame);
+	border-radius: var(--radius-frame);
+	box-shadow: var(--shadow);
+}
+
+.button {
+	font: inherit;
+	font-family: var(--font-display);
+	font-weight: 800;
+	cursor: pointer;
+	border-radius: var(--radius-pill);
+	padding: var(--space-2) var(--space-5);
+	border: var(--border-card) solid transparent;
+	/* Released buttons spring back with a little overshoot; presses squish at once (see :active). */
+	transition:
+		transform var(--motion-fast) var(--ease-bounce),
+		box-shadow var(--motion-fast) var(--ease-out),
+		border-color var(--motion-fast) ease;
+}
+
+.button:active:not(:disabled) {
+	transition-duration: var(--motion-press);
+}
+
+.button:disabled {
+	cursor: progress;
+	opacity: 0.75;
+}
+
+.button-primary {
+	background: var(--pl-pink);
+	color: var(--on-fill);
+	border-color: var(--on-fill);
+	box-shadow: var(--shadow-small);
+	font-size: 1.05rem;
+	padding: var(--space-3) var(--space-6);
+}
+
+.button-primary:hover:not(:disabled) {
+	transform: translate(-1px, -1px);
+	box-shadow: 5px 5px 0 var(--shadow-colour);
+}
+
+.button-primary:active:not(:disabled) {
+	transform: translate(3px, 3px) scale(1.03, 0.92);
+	box-shadow: 1px 1px 0 var(--shadow-colour);
+}
+
+.button-ghost {
+	background: transparent;
+	color: var(--text);
+	border-color: var(--frame-quiet);
+}
+
+.button-ghost:hover:not(:disabled) {
+	border-color: var(--pl-teal);
+	transform: translateY(-1px);
+}
+
+.button-ghost:active:not(:disabled) {
+	transform: scale(1.04, 0.9);
+}
+
+.field {
+	display: grid;
+	gap: var(--space-1);
+}
+
+.field-label {
+	font-weight: 700;
+	font-size: var(--text-small);
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--text-muted);
+}
+
+.field input {
+	font: inherit;
+	font-size: 1rem;
+	color: var(--text);
+	background: var(--field-bg);
+	border: var(--border-card) solid var(--field-border);
+	border-radius: var(--radius-card);
+	padding: var(--space-3) var(--space-4);
+	width: 100%;
+}
+
+.field input:focus-visible {
+	border-color: var(--pl-teal);
+	outline-offset: 2px;
+}
+
+/* ---- Badges -------------------------------------------------------------------------------- */
+
+.badge {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+	padding: 2px var(--space-3);
+	border-radius: var(--radius-pill);
+	font-size: var(--text-small);
+	font-weight: 800;
+	line-height: 1.5;
+	white-space: nowrap;
+	color: var(--on-fill);
+	border: 2px solid var(--on-fill);
+}
+
+.badge-open {
+	background: var(--pl-teal);
+}
+
+.badge-closed,
+.badge-muted,
+.badge-low {
+	background: var(--surface-2);
+	color: var(--text);
+	border-color: var(--frame-quiet);
+}
+
+.badge-overdue {
+	background: var(--pl-pink);
+}
+
+.badge-overdue::before {
+	content: "!";
+	font-weight: 900;
+}
+
+.badge-blocked {
+	background: var(--pl-yellow);
+}
+
+.badge-due {
+	background: transparent;
+	color: var(--text);
+	border-color: var(--frame-quiet);
+}
+
+.badge-high {
+	background: var(--pl-violet-deep);
+	color: #ffffff;
+	border-color: var(--on-fill);
+}
+
+/* ---- Sign in ------------------------------------------------------------------------------- */
+
+.sign-in-page {
+	min-height: 100vh;
+	display: grid;
+	grid-template-columns: minmax(0, 460px);
+	place-content: center;
+	align-items: center;
+	padding: var(--space-6) var(--space-4);
+	position: relative;
+	overflow: hidden;
+}
+
+.dots-corner {
+	position: absolute;
+	width: 132px;
+	height: 88px;
+	left: 6%;
+	top: 10%;
+}
+
+.sign-in {
+	position: relative;
+	min-width: 0;
+	display: grid;
+	gap: var(--space-4);
+	padding: var(--space-6);
+}
+
+.sign-in-brand {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-4);
+}
+
+.tagline {
+	margin: calc(var(--space-2) * -1) 0 0;
+	font-family: var(--font-display);
+	font-weight: 800;
+	color: var(--accent-text);
+}
+
+.sign-in-title {
+	font-size: 1.35rem;
+}
+
+.hint {
+	margin: 0;
+	color: var(--text-muted);
+}
+
+.error {
+	margin: 0;
+	min-height: 1.5em;
+	color: var(--error);
+	font-weight: 700;
+}
+
+.sign-in .squiggle {
+	justify-self: end;
+}
+
+/* ---- Header -------------------------------------------------------------------------------- */
+
+.bar {
+	display: flex;
+	align-items: center;
+	gap: var(--space-4);
+	padding: var(--space-3) var(--space-5);
+	background: var(--surface);
+	border-bottom: var(--border-frame) solid var(--frame);
+	box-shadow: 0 6px 0 var(--shadow-colour);
+	position: sticky;
+	top: 0;
+	z-index: 1;
+}
+
+.brand {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-3);
+	text-decoration: none;
+	margin-right: auto;
+}
+
+.who {
+	font-weight: 800;
+	font-family: var(--font-mono);
+	padding: 2px var(--space-3);
+	border-radius: var(--radius-pill);
+	background: var(--surface-2);
+	border: 2px solid var(--frame-quiet);
+}
+
+.who-label {
+	font-family: var(--font-body);
+	font-weight: 600;
+	color: var(--text-muted);
+}
+
+/* ---- Page ---------------------------------------------------------------------------------- */
+
+.page {
+	max-width: 1240px;
+	margin: 0 auto;
+	padding: var(--space-6) var(--space-5) var(--space-7);
+}
+
+.page-head {
+	display: flex;
+	align-items: center;
+	gap: var(--space-4);
+	flex-wrap: wrap;
+}
+
+.page-title {
+	font-size: 2.25rem;
+}
+
+.page-title .room-id {
+	font-size: 0.55em;
+	font-weight: 700;
+	overflow-wrap: anywhere;
+	color: var(--accent-text);
+}
+
+.status {
+	margin: var(--space-2) 0 var(--space-4);
+	min-height: 1.5em;
+	color: var(--text-muted);
+}
+
+.meta {
+	color: var(--text-muted);
+	font-size: var(--text-small);
+}
+
+.empty {
+	color: var(--text-muted);
+	margin: 0;
+}
+
+/* ---- Rooms list ---------------------------------------------------------------------------- */
+
+.rooms {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+	gap: var(--space-6);
+}
+
+.room-card {
+	display: grid;
+	gap: var(--space-3);
+	padding: var(--space-5);
+}
+
+.room-card.is-closed {
+	border-color: var(--frame-quiet);
+	border-style: dashed;
+	box-shadow: none;
+}
+
+.room-link {
+	display: grid;
+	gap: var(--space-2);
+	color: inherit;
+	text-decoration: none;
+}
+
+.room-link:hover .room-id {
+	text-decoration: underline;
+}
+
+.room-head {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	flex-wrap: wrap;
+}
+
+.room-card .room-id {
+	font-weight: 700;
+	font-size: 0.95rem;
+	overflow-wrap: anywhere;
+}
+
+.counts {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+}
+
+.count {
+	font-size: var(--text-small);
+	padding: 2px var(--space-3);
+	border-radius: var(--radius-pill);
+	background: var(--surface-2);
+	color: var(--text);
+}
+
+.count strong {
+	font-weight: 900;
+}
+
+.count-overdue {
+	background: var(--pl-pink);
+	color: var(--on-fill);
+	font-weight: 700;
+}
+
+.count-blocked {
+	background: var(--pl-yellow);
+	color: var(--on-fill);
+	font-weight: 700;
+}
+
+.empty-state {
+	position: relative;
+	padding: var(--space-7) var(--space-6);
+	text-align: center;
+	display: grid;
+	gap: var(--space-2);
+	justify-items: center;
+}
+
+.empty-state .dots {
+	width: 110px;
+	height: 66px;
+	margin-bottom: var(--space-3);
+}
+
+.empty-state p {
+	margin: 0;
+	color: var(--text-muted);
+}
+
+/* ---- One room ------------------------------------------------------------------------------ */
+
+.back {
+	display: inline-block;
+	font-weight: 700;
+	margin-bottom: var(--space-3);
+}
+
+.room-state {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	flex-wrap: wrap;
+	margin: var(--space-3) 0 0;
+}
+
+.panel {
+	padding: var(--space-5);
+	margin-bottom: var(--space-6);
+}
+
+.panel-head {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	margin-bottom: var(--space-4);
+}
+
+.panel-head h2 {
+	font-size: 1.4rem;
+}
+
+.board {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: var(--space-4);
+}
+
+.column {
+	background: var(--bg);
+	border-radius: var(--radius-card);
+	padding: var(--space-3);
+	border-top: 8px solid var(--column-colour);
+}
+
+.column-open {
+	--column-colour: var(--pl-teal);
+}
+
+.column-claimed {
+	--column-colour: var(--pl-yellow);
+}
+
+.column-done {
+	--column-colour: var(--pl-pink);
+}
+
+.column-confirmed {
+	--column-colour: var(--pl-violet);
+}
+
+.column-confirmed .column-count {
+	background: var(--pl-violet-deep);
+	color: #ffffff;
+}
+
+.column-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	font-size: 0.95rem;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	margin-bottom: var(--space-3);
+}
+
+.column-count {
+	min-width: 1.9em;
+	text-align: center;
+	border-radius: var(--radius-pill);
+	padding: 0 var(--space-2);
+	background: var(--column-colour);
+	color: var(--on-fill);
+}
+
+.column-empty {
+	margin: 0;
+	padding: var(--space-3);
+	color: var(--text-muted);
+	font-size: var(--text-small);
+	border: 2px dashed var(--frame-quiet);
+	border-radius: var(--radius-card);
+	text-align: center;
+}
+
+.tasks {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: var(--space-3);
+}
+
+.task {
+	background: var(--surface);
+	border: var(--border-card) solid var(--frame-quiet);
+	border-radius: var(--radius-card);
+	padding: var(--space-3);
+	display: grid;
+	gap: var(--space-2);
+	overflow-wrap: anywhere;
+}
+
+.task.is-overdue {
+	border-color: var(--pl-pink);
+	box-shadow: var(--shadow-small);
+}
+
+.task.is-blocked {
+	border-color: var(--pl-yellow);
+	border-style: dashed;
+}
+
+.task p {
+	margin: 0;
+}
+
+.task-title {
+	font-weight: 700;
+}
+
+.task-number {
+	font-family: var(--font-mono);
+	color: var(--accent-text);
+}
+
+.flags {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-1);
+}
+
+.done-when {
+	font-size: var(--text-small);
+}
+
+.done-when-label {
+	font-weight: 800;
+	color: var(--text-muted);
+}
+
+.room-columns {
+	display: grid;
+	grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+	gap: var(--space-6);
+	align-items: start;
+}
+
+.room-columns .panel {
+	margin-bottom: 0;
+}
+
+.earlier {
+	margin-bottom: var(--space-4);
+}
+
+.messages {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: var(--space-3);
+}
+
+.message {
+	display: flex;
+	gap: var(--space-3);
+	align-items: flex-start;
+}
+
+.avatar {
+	flex: none;
+	width: 36px;
+	height: 36px;
+	border-radius: 12px;
+	display: grid;
+	place-items: center;
+	font-family: var(--font-display);
+	font-weight: 900;
+	color: var(--on-fill);
+	border: 2px solid var(--on-fill);
+	box-shadow: 2px 2px 0 var(--shadow-colour);
+}
+
+.avatar-pink {
+	background: var(--pl-pink);
+}
+
+.avatar-yellow {
+	background: var(--pl-yellow);
+}
+
+.avatar-teal {
+	background: var(--pl-teal);
+}
+
+.avatar-violet {
+	background: var(--pl-violet-deep);
+	color: #ffffff;
+}
+
+.bubble {
+	min-width: 0;
+	flex: 1;
+	background: var(--bg);
+	border-radius: 4px var(--radius-card) var(--radius-card) var(--radius-card);
+	padding: var(--space-2) var(--space-4) var(--space-3);
+}
+
+.bubble p {
+	margin: 0;
+}
+
+.sender {
+	font-weight: 800;
+	color: var(--text);
+}
+
+.text {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.board-line {
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+	padding: var(--space-2) var(--space-3);
+	border: 2px dashed var(--frame-quiet);
+	border-radius: var(--radius-card);
+	font-size: var(--text-small);
+}
+
+.board-line-tag {
+	font-family: var(--font-display);
+	font-weight: 900;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	padding: 0 var(--space-2);
+	border-radius: var(--radius-pill);
+	background: var(--pl-teal);
+	color: var(--on-fill);
+}
+
+.board-line .text {
+	flex: 1;
+	min-width: 12em;
+}
+
+.people {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: var(--space-3);
+}
+
+.person {
+	display: flex;
+	gap: var(--space-3);
+	align-items: center;
+}
+
+.person-text {
+	display: grid;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.owner {
+	font-size: var(--text-small);
+	color: var(--accent-text);
+	font-weight: 700;
+}
+
+/* ---- Phone width --------------------------------------------------------------------------- */
+
+@media (max-width: 1000px) {
+	.board {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.room-columns {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+@media (max-width: 760px) {
+	.board {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.bar {
+		padding: var(--space-2) var(--space-3);
+		gap: var(--space-2);
+	}
+
+	.bar .wordmark {
+		font-size: 1.2rem;
+	}
+
+	.bar .logo-mark {
+		width: 32px;
+		height: 32px;
+	}
+
+	.who {
+		font-size: var(--text-small);
+	}
+
+	.who-label {
+		display: none;
+	}
+
+	.button-ghost {
+		padding: var(--space-1) var(--space-3);
+	}
+
+	.page {
+		padding: var(--space-5) var(--space-3) var(--space-6);
+	}
+
+	.page-title {
+		font-size: 1.8rem;
+	}
+
+	.rooms {
+		grid-template-columns: minmax(0, 1fr);
+		gap: var(--space-5);
+	}
+
+	.frame {
+		border-radius: 22px;
+		box-shadow: 6px 6px 0 var(--shadow-colour);
+	}
+
+	.panel,
+	.room-card {
+		padding: var(--space-4);
+	}
+
+	.sign-in {
+		padding: var(--space-5);
+	}
+
+	.sign-in .logo-mark {
+		width: 64px;
+		height: 64px;
+	}
+
+	.wordmark-large {
+		font-size: 2.2rem;
+	}
+
+	.dots-corner {
+		display: none;
+	}
+}
+
+/* ---- Motion --------------------------------------------------------------------------------- *
+ * Transform and opacity only, so phones stay smooth. Timings live in tokens.css. Entrances run
+ * once when an element mounts; a poll that changes nothing mounts nothing, so nothing moves.
+ * motion.ts adds the board glide, the confetti and the sign-in shake. */
+
+@keyframes drop-in {
+	0% {
+		opacity: 0;
+		transform: translateY(-48px) rotate(-2deg);
+	}
+	40% {
+		opacity: 1;
+	}
+	100% {
+		transform: none;
+	}
+}
+
+@keyframes rise-in {
+	0% {
+		opacity: 0;
+		transform: translateY(18px) scale(0.97);
+	}
+	45% {
+		opacity: 1;
+	}
+	100% {
+		transform: none;
+	}
+}
+
+@keyframes pop-in {
+	0% {
+		opacity: 0;
+		transform: translateX(-14px) scale(0.92);
+	}
+	40% {
+		opacity: 1;
+	}
+	100% {
+		transform: none;
+	}
+}
+
+@keyframes fade-in {
+	from {
+		opacity: 0;
+	}
+}
+
+@keyframes wave {
+	from {
+		transform: scaleY(1);
+	}
+	to {
+		transform: scaleY(0.55) translateX(3%);
+	}
+}
+
+@keyframes bob {
+	0%,
+	24%,
+	100% {
+		transform: none;
+	}
+	10% {
+		transform: translateY(-34%);
+	}
+}
+
+@keyframes twinkle {
+	0%,
+	100% {
+		opacity: 0;
+	}
+	50% {
+		opacity: 1;
+	}
+}
+
+@keyframes pulse {
+	0%,
+	100% {
+		transform: none;
+	}
+	50% {
+		transform: scale(1.07);
+	}
+}
+
+@keyframes breathe {
+	0%,
+	100% {
+		transform: scale(0.8);
+		opacity: 0.75;
+	}
+	50% {
+		transform: scale(1.1);
+		opacity: 1;
+	}
+}
+
+@keyframes ping {
+	0% {
+		transform: scale(1);
+		opacity: 0.7;
+	}
+	100% {
+		transform: scale(2.6);
+		opacity: 0;
+	}
+}
+
+@keyframes hop {
+	0%,
+	60%,
+	100% {
+		transform: none;
+	}
+	30% {
+		transform: translateY(-6px);
+	}
+}
+
+/* Entrances */
+
+.sign-in {
+	animation: drop-in var(--motion-entrance) var(--ease-drop) backwards;
+}
+
+.room-card,
+.empty-state {
+	animation: rise-in var(--motion-entrance) var(--ease-bounce) backwards;
+}
+
+.room-card:nth-child(2) {
+	animation-delay: calc(var(--motion-stagger) * 1);
+}
+.room-card:nth-child(3) {
+	animation-delay: calc(var(--motion-stagger) * 2);
+}
+.room-card:nth-child(4) {
+	animation-delay: calc(var(--motion-stagger) * 3);
+}
+.room-card:nth-child(5) {
+	animation-delay: calc(var(--motion-stagger) * 4);
+}
+.room-card:nth-child(6) {
+	animation-delay: calc(var(--motion-stagger) * 5);
+}
+.room-card:nth-child(n + 7) {
+	animation-delay: calc(var(--motion-stagger) * 6);
+}
+
+.message.is-new {
+	animation: pop-in var(--motion-entrance) var(--ease-bounce) backwards;
+	transform-origin: left center;
+}
+
+/* Ambient: slow, small, behind the content */
+
+.squiggle path {
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: wave var(--motion-wave) var(--ease-in-out) infinite alternate;
+}
+
+.squiggle-teal path {
+	animation-delay: calc(var(--motion-wave) / -3);
+}
+
+.squiggle-yellow path {
+	animation-delay: calc(var(--motion-wave) / -1.5);
+}
+
+.logo-mark .mark-dot {
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: bob var(--motion-bob) var(--ease-in-out) infinite;
+}
+
+.logo-mark .mark-dot-2 {
+	animation-delay: calc(var(--motion-bob) * 0.08);
+}
+
+.logo-mark .mark-dot-3 {
+	animation-delay: calc(var(--motion-bob) * 0.16);
+}
+
+/* Two sparse grids of brighter dots on the same 24px lattice as the body's, fading in and out of step. */
+body::before,
+body::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	pointer-events: none;
+	opacity: 0;
+	animation: twinkle var(--motion-twinkle) var(--ease-in-out) infinite;
+}
+
+body::before {
+	background-image: radial-gradient(circle at 12px 12px, var(--dot) 2px, transparent 2.4px);
+	background-size: 72px 48px;
+}
+
+body::after {
+	background-image: radial-gradient(circle at 60px 36px, var(--dot) 2px, transparent 2.4px);
+	background-size: 96px 72px;
+	animation-delay: calc(var(--motion-twinkle) / -2);
+}
+
+.badge-overdue,
+.count-overdue {
+	animation: pulse var(--motion-pulse) var(--ease-in-out) infinite;
+}
+
+/* Live: a dot that breathes while polling is on */
+
+.live {
+	margin-left: auto;
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	font-size: var(--text-small);
+	font-weight: 800;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	color: var(--text-muted);
+}
+
+.live-dot {
+	position: relative;
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	background: var(--frame-quiet);
+}
+
+.live.is-on .live-dot {
+	background: var(--pl-teal);
+	animation: breathe var(--motion-breathe) var(--ease-in-out) infinite;
+}
+
+.live.is-on .live-dot::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	border-radius: 50%;
+	background: var(--pl-teal);
+	animation: ping var(--motion-breathe) var(--ease-out) infinite;
+}
+
+/* Loading: the logo's three dots hop in turn */
+
+.loader {
+	display: inline-flex;
+	gap: 5px;
+	margin-right: var(--space-2);
+	vertical-align: middle;
+}
+
+.loader span {
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+	animation: hop 0.9s var(--ease-in-out) infinite;
+}
+
+.loader span:nth-child(1) {
+	background: var(--pl-yellow);
+}
+
+.loader span:nth-child(2) {
+	background: var(--pl-teal);
+	animation-delay: 0.12s;
+}
+
+.loader span:nth-child(3) {
+	background: var(--pl-violet);
+	animation-delay: 0.24s;
+}
+
+/* Hover: cards lift and the violet offset shadow grows. Only where there is a real pointer. */
+
+.room-card,
+.task {
+	transition:
+		transform var(--motion-base) var(--ease-bounce),
+		box-shadow var(--motion-base) var(--ease-out);
+}
+
+@media (hover: hover) {
+	.room-card:hover {
+		transform: translate(-4px, -4px);
+		box-shadow: 12px 12px 0 var(--shadow-colour);
+	}
+
+	.room-card.is-closed:hover {
+		box-shadow: none;
+	}
+
+	.task:hover {
+		transform: translate(-2px, -2px);
+		box-shadow: 4px 4px 0 var(--shadow-colour);
+	}
+
+	.task.is-overdue:hover {
+		box-shadow: 7px 7px 0 var(--shadow-colour);
+	}
+}
+
+.room-card:active {
+	transform: translate(1px, 1px) scale(0.99);
+	transition-duration: var(--motion-press);
+}
+
+/* Confetti, placed by motion.ts at a confirmed task */
+
+.confetti {
+	position: fixed;
+	inset: 0;
+	z-index: 10;
+	pointer-events: none;
+	overflow: hidden;
+}
+
+.confetti-piece {
+	position: absolute;
+	left: -5px;
+	top: -4px;
+	width: 10px;
+	height: 7px;
+	border-radius: 2px;
+}
+
+.confetti-piece.is-sparkle {
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+}
+
+.confetti-pink {
+	background: var(--pl-pink);
+}
+
+.confetti-yellow {
+	background: var(--pl-yellow);
+}
+
+.confetti-teal {
+	background: var(--pl-teal);
+}
+
+.confetti-violet {
+	background: var(--pl-violet);
+}
+
+/* Reduced motion: every loop stops, transitions are instant, entrances become short fades. */
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		transition: none !important;
+	}
+
+	.squiggle path,
+	.logo-mark .mark-dot,
+	body::before,
+	body::after,
+	.badge-overdue,
+	.count-overdue,
+	.live-dot,
+	.live-dot::after,
+	.loader span {
+		animation: none !important;
+	}
+
+	.sign-in,
+	.room-card,
+	.empty-state,
+	.message.is-new {
+		animation: fade-in var(--motion-base) ease backwards;
+	}
+}

@@ -5,6 +5,7 @@
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { apiError, handleApi } from "./api.ts";
+import { serveApp, type WebAssets } from "./web.ts";
 import {
 	expiryFrom,
 	isOverdue,
@@ -682,7 +683,7 @@ export async function identify(request: Request, credentials: Credential[]): Pro
 }
 
 /**
- * Serves the MCP endpoint, the people API and the root page. Returns null for anything else, so
+ * Serves the MCP endpoint, the people API, the people's page at /app and the root page. Returns null for anything else, so
  * the host can handle room streams (WebSocket upgrades differ per host) and its own 404.
  */
 export async function handleRequest(
@@ -690,8 +691,12 @@ export async function handleRequest(
 	rooms: Rooms,
 	teamsJson: string | undefined,
 	origin: string,
+	assets: WebAssets,
 ): Promise<Response | null> {
 	const url = new URL(request.url);
+	if (url.pathname === "/app" || url.pathname.startsWith("/app/")) {
+		return serveApp(request, url, assets);
+	}
 	const isApi = url.pathname === "/api" || url.pathname.startsWith("/api/");
 
 	if (url.pathname === "/mcp" || isApi) {
@@ -722,7 +727,9 @@ export async function handleRequest(
 	}
 
 	if (url.pathname === "/") {
-		return new Response("partyline: MCP at /mcp, the people API at /api, room streams at /t/<team>/rooms/<id>/ws\n");
+		return new Response(
+			"partyline: MCP at /mcp, the people API at /api, its web page at /app, room streams at /t/<team>/rooms/<id>/ws\n",
+		);
 	}
 
 	return null;

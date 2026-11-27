@@ -4,6 +4,16 @@
 	"main": "src/cloudflare/worker.ts",
 	"compatibility_date": "2026-10-20",
 	"compatibility_flags": ["nodejs_compat"],
+	// The people's page is built from src/web into dist/web by Vite before every deploy or dev run,
+	// then bundled as text and served by the core handler at /app.
+	"build": { "command": "npm run build", "watch_dir": "src/web" },
+	"rules": [
+		{
+			"type": "Text",
+			"globs": ["**/dist/web/index.html", "**/dist/web/app.css", "**/dist/web/app.js"],
+			"fallthrough": true,
+		},
+	],
 	"observability": { "enabled": true },
 	"vars": { "ROOM_EXPIRY_DAYS": "30" },
 	"durable_objects": {

@@ -11,7 +11,7 @@
  *
  * Run a single instance: rooms and their live streams live in this process.
  */
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -31,6 +31,7 @@ import {
 	roomKey,
 } from "../core/app.ts";
 import { type Message, RoomLog, type SqlValue } from "../core/room-log.ts";
+import type { WebAssets } from "../core/web.ts";
 
 const port = Number(process.env.PORT ?? 8787);
 const dataDir = process.env.DATA_DIR ?? "./data";
@@ -58,6 +59,10 @@ db.exec("PRAGMA journal_mode = WAL");
 const log = new RoomLog({
 	all: <Row>(query: string, ...params: SqlValue[]) => db.prepare(query).all(...params) as Row[],
 });
+
+// The people's page as Vite builds it from src/web (npm run build).
+const webFile = (name: string) => readFileSync(new URL(`../../dist/web/${name}`, import.meta.url), "utf8");
+const assets: WebAssets = { html: webFile("index.html"), css: webFile("app.css"), script: webFile("app.js") };
 
 const listeners = new Map<string, Set<WebSocket>>();
 
@@ -194,7 +199,7 @@ async function send(response: Response, out: ServerResponse): Promise<void> {
 const server = createServer(async (request, out) => {
 	try {
 		const origin = originOf(request);
-		const response = await handleRequest(toWebRequest(request, origin), rooms, process.env.TEAMS, origin);
+		const response = await handleRequest(toWebRequest(request, origin), rooms, process.env.TEAMS, origin, assets);
 		await send(response ?? new Response("Not found", { status: 404 }), out);
 	} catch (error) {
 		console.error(error);

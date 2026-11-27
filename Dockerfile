@@ -1,3 +1,12 @@
+# Build the people's page (src/web) with Vite; the server image needs only its output.
+FROM node:26-alpine AS web
+WORKDIR /build
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY vite.config.ts ./
+COPY src/web ./src/web
+RUN npm run build
+
 FROM node:26-alpine
 
 WORKDIR /app
@@ -8,6 +17,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 COPY src/core ./src/core
 COPY src/node ./src/node
+COPY --from=web /build/dist/web ./dist/web
 
 RUN mkdir -p /data && chown node:node /data
 USER node

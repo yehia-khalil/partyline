@@ -1,5 +1,12 @@
 import { handleRequest, matchSocketPath, parseExpiryDays, type Rooms, roomKey } from "../core/app.ts";
+import type { WebAssets } from "../core/web.ts";
 import type { Room } from "./room.ts";
+// Built by Vite from src/web (npm run build), then bundled as text by the rules in wrangler.jsonc.
+import html from "../../dist/web/index.html";
+import css from "../../dist/web/app.css";
+import script from "../../dist/web/app.js";
+
+const assets: WebAssets = { html, css, script };
 
 export { Room } from "./room.ts";
 export { TeamIndex } from "./team-index.ts";
@@ -44,7 +51,8 @@ export default {
 		}
 
 		return (
-			(await handleRequest(request, roomsOn(env), env.TEAMS, url.origin)) ?? new Response("Not found", { status: 404 })
+			(await handleRequest(request, roomsOn(env), env.TEAMS, url.origin, assets)) ??
+			new Response("Not found", { status: 404 })
 		);
 	},
 } satisfies ExportedHandler<Env>;

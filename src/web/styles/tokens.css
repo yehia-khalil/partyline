@@ -1,0 +1,111 @@
+/*
+ * Partyline's design tokens, taken from .github/assets (banner and diagram). Dark is the hero;
+ * light follows prefers-color-scheme. Every colour pairing used for text meets WCAG AA (4.5:1).
+ */
+:root {
+	/* Brand palette */
+	--pl-night: #150c2b;
+	--pl-night-2: #241446;
+	--pl-cream: #fff8ee;
+	--pl-pink: #ff4fa3;
+	--pl-yellow: #ffd23f;
+	--pl-teal: #3ddbd9;
+	--pl-violet: #8b5cf6;
+	--pl-violet-deep: #5b3fd1;
+
+	/* Roles (dark) */
+	--bg: var(--pl-night);
+	--surface: var(--pl-night-2);
+	--surface-2: #2f1b5c;
+	--text: var(--pl-cream);
+	--text-muted: #cfc3e8;
+	--accent-text: #ff7ab9;
+	--link: var(--pl-teal);
+	--frame: var(--pl-pink);
+	--frame-quiet: #4a3487;
+	--shadow-colour: var(--pl-violet-deep);
+	--dot: rgb(255 248 238 / 0.16);
+	--field-border: #9b8cc4;
+	--field-bg: var(--pl-night);
+	--on-fill: var(--pl-night);
+	--error: #ff8fc4;
+
+	/* Shape */
+	--radius-frame: 28px;
+	--radius-card: 18px;
+	--radius-pill: 999px;
+	--border-frame: 4px;
+	--border-card: 3px;
+	--shadow: 8px 8px 0 var(--shadow-colour);
+	--shadow-small: 4px 4px 0 var(--shadow-colour);
+
+	/* Spacing scale */
+	--space-1: 4px;
+	--space-2: 8px;
+	--space-3: 12px;
+	--space-4: 16px;
+	--space-5: 24px;
+	--space-6: 32px;
+	--space-7: 48px;
+
+	/* Type: system faces only, nothing fetched from another origin */
+	--font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+	--font-display: ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", system-ui, sans-serif;
+	--font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	--text-small: 0.8125rem;
+	--text-body: 0.9375rem;
+
+	/* Motion: durations and easings for every animation and transition. motion.ts reads the
+	   glide, burst and shake ones. Ambient loops are slow so they stay behind the content. */
+	--motion-press: 90ms;
+	--motion-fast: 160ms;
+	--motion-base: 260ms;
+	--motion-entrance: 460ms;
+	--motion-stagger: 55ms;
+	--motion-shake: 420ms;
+	--motion-glide: 620ms;
+	--motion-burst: 950ms;
+	--motion-breathe: 2.4s;
+	--motion-pulse: 2.2s;
+	--motion-bob: 3.6s;
+	--motion-wave: 3.2s;
+	--motion-twinkle: 7s;
+	--ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+	--ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+	--ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+	--ease-drop: cubic-bezier(0.18, 1.35, 0.45, 1);
+
+	color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+	:root {
+		--bg: var(--pl-cream);
+		--surface: #ffffff;
+		--surface-2: #f4ecff;
+		--text: var(--pl-night-2);
+		--text-muted: #54477a;
+		--accent-text: #b8166a;
+		--link: #4a2fc0;
+		--frame: var(--pl-pink);
+		--frame-quiet: #c9bde6;
+		--shadow-colour: var(--pl-violet-deep);
+		--dot: rgb(36 20 70 / 0.14);
+		--field-border: #6a5c93;
+		--field-bg: #ffffff;
+		--on-fill: var(--pl-night);
+		--error: #b8166a;
+
+		color-scheme: light;
+	}
+}
+
+/* The logo and wordmark keep the banner's own shadow: violet on night, night on cream. */
+:root {
+	--mark-shadow: var(--pl-violet-deep);
+}
+@media (prefers-color-scheme: light) {
+	:root {
+		--mark-shadow: var(--pl-night-2);
+	}
+}

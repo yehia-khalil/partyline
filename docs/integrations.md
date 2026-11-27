@@ -176,12 +176,13 @@ curl -H "Authorization: Bearer $VIEWER_TOKEN" https://rooms.example.com/api/t/co
 
 Errors are `{"error": "<why>"}`:
 
-| Request                                       | Status | Body                                                                             |
-| --------------------------------------------- | ------ | -------------------------------------------------------------------------------- |
-| No token, or one without `Bearer`             | `401`  | `{"error":"A viewer token is required."}`                                        |
-| A member token                                | `403`  | `{"error":"Member tokens can't use the people API, which takes viewer tokens."}` |
-| Another team, or a room that doesn't exist    | `404`  | `{"error":"No such room."}`                                                      |
-| A bad `since`, `limit` or `include_confirmed` | `400`  | `{"error":"since is a seq (0 or more) and limit a number from 1 to 200."}`       |
+| Request                                    | Status | Body                                                                             |
+| ------------------------------------------ | ------ | -------------------------------------------------------------------------------- |
+| No token, or one without `Bearer`          | `401`  | `{"error":"A viewer token is required."}`                                        |
+| A member token                             | `403`  | `{"error":"Member tokens can't use the people API, which takes viewer tokens."}` |
+| Another team, or a room that doesn't exist | `404`  | `{"error":"No such room."}`                                                      |
+| A bad `since` or `limit`                   | `400`  | `{"error":"since is a seq (0 or more) and limit a number from 1 to 200."}`       |
+| A bad `include_confirmed`                  | `400`  | `{"error":"include_confirmed is true or false."}`                                |
 
 ### Live updates
 

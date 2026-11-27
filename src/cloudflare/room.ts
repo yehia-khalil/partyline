@@ -7,9 +7,12 @@ import { type Message, type NewTask, RoomLog, type Task, type TaskChange, type T
  * lands here in order and is pushed to every open WebSocket. Its alarm is kept at whichever
  * comes first: the room's expiry time (ROOM_EXPIRY_DAYS after its latest activity), when it
  * deletes the room, or the moment a task goes overdue, when it posts the overdue notice.
+ * Every change is also written to the team's TeamIndex, so the team's rooms can be listed.
  */
 export class Room extends DurableObject<Env> {
 	private readonly log: RoomLog;
+	/** Whether this instance has written the room to its team's index yet. */
+	private indexed = false;
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -48,6 +51,29 @@ export class Room extends DurableObject<Env> {
 		if (alarm === null || alarm > this.log.nextCheckAt(this.key, this.expiryDays).getTime()) {
 			await this.scheduleExpiry();
 		}
+		// Rooms made before the index existed join it the first time they are used.
+		if (!this.indexed) {
+			await this.syncIndex();
+		}
+	}
+
+	/**
+	 * Writes the room's summary to its team's index, or removes it once the room is gone. A failure
+	 * is logged and leaves the room's own change in place: the next write repairs the index.
+	 */
+	private async syncIndex(room = this.key): Promise<void> {
+		const [team, roomId] = room.split(":");
+		try {
+			const index = this.env.TEAM_INDEX.get(this.env.TEAM_INDEX.idFromName(team));
+			if (this.log.exists(room)) {
+				await index.put(roomId, this.log.summary(room));
+			} else {
+				await index.remove(roomId);
+			}
+			this.indexed = true;
+		} catch (error) {
+			console.error(`partyline: could not update the room index of team ${team}: ${(error as Error).message}`);
+		}
 	}
 
 	private send(frame: string): void {
@@ -73,12 +99,14 @@ export class Room extends DurableObject<Env> {
 	async open(): Promise<void> {
 		this.log.open(this.key);
 		await this.scheduleExpiry();
+		await this.syncIndex();
 	}
 
 	async post(sender: string, text: string): Promise<Message> {
 		const message = this.log.post(this.key, sender, text);
 		this.send(formatPush(this.roomId, message));
 		await this.scheduleExpiry();
+		await this.syncIndex();
 
 		return message;
 	}
@@ -105,6 +133,7 @@ export class Room extends DurableObject<Env> {
 		const added = this.log.addTask(this.key, actor, task);
 		this.send(formatPush(this.roomId, added.message));
 		await this.scheduleExpiry();
+		await this.syncIndex();
 
 		return added.task;
 	}
@@ -115,6 +144,7 @@ export class Room extends DurableObject<Env> {
 			this.send(formatPush(this.roomId, message));
 		}
 		await this.scheduleExpiry();
+		await this.syncIndex();
 
 		return task;
 	}
@@ -137,26 +167,29 @@ export class Room extends DurableObject<Env> {
 		this.send(formatClosed(this.roomId));
 		this.endStreams("room closed");
 		await this.scheduleExpiry();
+		await this.syncIndex();
 
 		return { expiresAt: this.log.expiresAt(this.key, this.expiryDays).toISOString(), alreadyClosed };
 	}
 
 	/**
 	 * Deletes the room once it has expired, otherwise posts any overdue notices, then moves the
-	 * alarm to the next check. Reads the room from its own database rather than the object's name,
-	 * which an alarm may not have.
+	 * alarm to the next check and brings the team's index up to date. Reads the room from its own
+	 * database rather than the object's name, which an alarm may not have.
 	 */
 	async alarm(): Promise<void> {
 		const days = this.expiryDays;
 		for (const room of this.log.expired(new Date(), days)) {
 			this.endStreams("room expired");
 			this.log.delete(room);
+			await this.syncIndex(room);
 		}
 		for (const room of this.log.rooms()) {
 			const roomId = room.split(":").at(-1) ?? "";
 			for (const message of this.log.noticeOverdue(room)) {
 				this.send(formatPush(roomId, message));
 			}
+			await this.syncIndex(room);
 		}
 		const next = this.log.rooms().map((room) => this.log.nextCheckAt(room, days).getTime());
 		if (next.length > 0) {

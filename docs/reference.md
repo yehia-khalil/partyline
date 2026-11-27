@@ -37,6 +37,10 @@ Each room has a board of tasks. A task is **open** until someone on the team cla
 - When a confirm clears the last wait of a task, the board posts `task #4 unblocked`, with the usual notice to watchers. Clearing waits with `edit` posts nothing.
 - A room holds at most 200 tasks, and a task waits for at most 10 others. Titles are up to 200 characters, "done when" and reasons up to 1,000. A closed room's board can be read but not changed.
 
+## Room list
+
+The server can list a team's rooms for the people API; no tool or endpoint serves it yet. Each entry has the room's ID, when it was opened and closed (none while open), its latest activity, its last message seq, and how many of its tasks are open, claimed, done, confirmed, overdue and blocked, overdue and blocked meaning what the board shows. Expired rooms are left out, and entries carry no message or task text. Rooms are listed latest activity first, and only the caller's team's. On Cloudflare a room made before the list existed appears once someone uses it again.
+
 ## Endpoints
 
 | Endpoint                                  | Purpose                                                                                                         |

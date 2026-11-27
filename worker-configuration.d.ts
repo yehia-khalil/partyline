@@ -5,11 +5,12 @@ interface __BaseEnv_Env {
 	ROOM_EXPIRY_DAYS: "30";
 	TEAMS: string;
 	ROOM: DurableObjectNamespace<import("./src/cloudflare/worker").Room>;
+	TEAM_INDEX: DurableObjectNamespace<import("./src/cloudflare/worker").TeamIndex>;
 }
 declare namespace Cloudflare {
 	interface GlobalProps {
 		mainModule: typeof import("./src/cloudflare/worker");
-		durableNamespaces: "Room";
+		durableNamespaces: "Room" | "TeamIndex";
 	}
 	interface Env extends __BaseEnv_Env {}
 }

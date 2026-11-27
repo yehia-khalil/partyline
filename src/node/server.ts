@@ -22,6 +22,7 @@ import {
 	formatClosed,
 	formatPush,
 	handleRequest,
+	listTeamRooms,
 	matchSocketPath,
 	parseExpiryDays,
 	parseTeams,
@@ -140,6 +141,9 @@ const rooms: Rooms = {
 	},
 	async getTask(team, roomId, number) {
 		return log.getTask(roomKey(team, roomId), number);
+	},
+	async listRooms(team) {
+		return listTeamRooms(log, team, expiryDays);
 	},
 };
 

@@ -47,6 +47,16 @@ test("no token or an unknown one resolves to nobody", async () => {
 	assert.equal(await identify(as("x".repeat(64)), credentials), null);
 });
 
+test("a token needs the Bearer scheme, in any case; a bare token resolves to nobody", async () => {
+	const header = (value) => new Request("http://localhost/api", { headers: { Authorization: value } });
+	assert.equal(await identify(header(tokens.aliceViewer), credentials), null);
+	assert.equal(await identify(header(`Token ${tokens.aliceViewer}`), credentials), null);
+	assert.equal(await identify(header("Bearer"), credentials), null);
+	for (const value of [`bearer ${tokens.aliceViewer}`, `BEARER  ${tokens.aliceViewer}`]) {
+		assert.equal((await identify(header(value), credentials))?.name, "alice", value);
+	}
+});
+
 test("the members-only shorthand still loads, as members", () => {
 	assert.deepEqual(
 		parseTeams(JSON.stringify({ core: { "alice-claude": tokens.alice } })).map(({ team, name, role }) => ({

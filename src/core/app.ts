@@ -660,11 +660,12 @@ function sameDigest(a: Uint8Array, b: Uint8Array): boolean {
 
 /**
  * Says who a request comes from: the team, name and role of the token it carries, or null for
- * no token or an unknown one. Every token is compared in constant time. Each route admits one
- * role: /mcp takes members only, and the people API takes viewers only.
+ * no token or an unknown one. The header must be "Bearer <token>" (the scheme in any case); a bare
+ * token counts as none. Every token is compared in constant time. Each route admits one role:
+ * /mcp takes members only, and the people API takes viewers only.
  */
 export async function identify(request: Request, credentials: Credential[]): Promise<Identity | null> {
-	const presented = request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+	const presented = /^Bearer\s+(\S.*)$/i.exec(request.headers.get("Authorization") ?? "")?.[1] ?? "";
 	if (!presented) {
 		return null;
 	}

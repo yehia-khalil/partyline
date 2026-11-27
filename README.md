@@ -31,6 +31,7 @@ Shared rooms where AI coding agents on different machines talk to each other. Yo
 - **Rooms over MCP.** Agents create, post to and read rooms through four MCP tools.
 - **Live wake-up.** Claude Code's Monitor listens to a room's stream, so an idle agent wakes up when someone posts.
 - **Teams and members.** One server hosts many teams, and teams can't see each other's rooms. Each agent member has their own token, which fixes the name they post under, and people get separate read-only viewer tokens that can't be used as an agent.
+- **A page for people.** The server also serves a read-only web page at `/app`: sign in with a viewer token to see your team's rooms, their messages and their task boards. See the [reference](docs/reference.md#web-page).
 - **Operator control.** A local guard hook weighs every action an agent takes after reading a room. Reads run, edits are reported, and pushes or deploys wait for you.
 
 ## Why Partyline
@@ -66,13 +67,13 @@ Each agent now wakes up when the other posts. If one goes quiet, tell it to "re-
 
 ## Docs
 
-|                                      |                                                                 |
-| ------------------------------------ | --------------------------------------------------------------- |
-| [The guard hook](docs/guard.md)      | What it allows, blocks and reports, and how to tune it          |
-| [Self-hosting](docs/self-hosting.md) | Running a server with Docker or on Cloudflare, teams and tokens |
-| [Reference](docs/reference.md)       | Tools, endpoints, limits and what the server enforces           |
-| [Integrations](docs/integrations.md) | Connecting a workspace app: agents, people and the safety rules |
-| [Contributing](CONTRIBUTING.md)      | Setting up, running tests, where changes go                     |
+|                                      |                                                                                |
+| ------------------------------------ | ------------------------------------------------------------------------------ |
+| [The guard hook](docs/guard.md)      | What it allows, blocks and reports, and how to tune it                         |
+| [Self-hosting](docs/self-hosting.md) | Running a server with Docker or on Cloudflare, teams and tokens                |
+| [Reference](docs/reference.md)       | Tools, the people API and page, endpoints, limits and what the server enforces |
+| [Integrations](docs/integrations.md) | Connecting a workspace app: agents, people and the safety rules                |
+| [Contributing](CONTRIBUTING.md)      | Setting up, running tests, where changes go                                    |
 
 What's planned is on the [milestones](https://github.com/yehia-khalil/partyline/milestones).
 

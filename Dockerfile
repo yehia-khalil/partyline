@@ -8,6 +8,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 COPY src/core ./src/core
 COPY src/node ./src/node
+COPY src/web ./src/web
 
 RUN mkdir -p /data && chown node:node /data
 USER node

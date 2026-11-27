@@ -4,6 +4,8 @@
 	"main": "src/cloudflare/worker.ts",
 	"compatibility_date": "2026-10-20",
 	"compatibility_flags": ["nodejs_compat"],
+	// The people's page (src/web) is bundled as text and served by the core handler at /app.
+	"rules": [{ "type": "Text", "globs": ["**/web/index.html", "**/web/app.css", "**/web/app.js"], "fallthrough": true }],
 	"observability": { "enabled": true },
 	"vars": { "ROOM_EXPIRY_DAYS": "30" },
 	"durable_objects": {

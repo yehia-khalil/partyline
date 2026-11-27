@@ -842,3 +842,43 @@ test(
 		assert.equal((await api(`/api/t/core/rooms/${roomId}`)).status, 404);
 	},
 );
+
+const CSP =
+	"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+
+test("the people's page and its files are served with a strict CSP, nosniff and no referrer", async () => {
+	for (const [path, type] of [
+		["/app", "text/html; charset=utf-8"],
+		["/app/app.js", "text/javascript; charset=utf-8"],
+		["/app/app.css", "text/css; charset=utf-8"],
+	]) {
+		const response = await fetch(`${base}${path}`);
+		assert.equal(response.status, 200, path);
+		assert.equal(response.headers.get("content-type"), type, path);
+		assert.equal(response.headers.get("content-security-policy"), CSP, path);
+		assert.equal(response.headers.get("x-content-type-options"), "nosniff", path);
+		assert.equal(response.headers.get("referrer-policy"), "no-referrer", path);
+		assert.equal(response.headers.get("access-control-allow-origin"), null, path);
+		assert.ok((await response.text()).length > 0, path);
+	}
+	const html = await (await fetch(`${base}/app`)).text();
+	assert.match(html, /<script src="\/app\/app\.js" defer><\/script>/);
+	assert.match(html, /<link rel="stylesheet" href="\/app\/app\.css" \/>/);
+
+	assert.equal((await fetch(`${base}/app`, { method: "POST" })).status, 405);
+	assert.equal((await fetch(`${base}/app/other.js`)).status, 404);
+});
+
+test("the page holds no data: with or without a token it is the same static file", async () => {
+	const { roomId } = await createRoom();
+	await call(TOKEN_A, "post_message", { room: roomId, text: "page-secret" });
+	const anonymous = await (await fetch(`${base}/app`)).text();
+	for (const token of [VIEWER_A, TOKEN_A]) {
+		const signed = await fetch(`${base}/app`, { headers: { Authorization: `Bearer ${token}` } });
+		assert.equal(await signed.text(), anonymous);
+	}
+	for (const path of ["/app", "/app/app.js"]) {
+		const body = await (await fetch(`${base}${path}`)).text();
+		assert.ok(!body.includes(roomId) && !body.includes("page-secret"), path);
+	}
+});

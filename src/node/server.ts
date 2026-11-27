@@ -70,11 +70,20 @@ function endStreams(key: string, frame: string | null, reason: string): void {
 	listeners.delete(key);
 }
 
-/** Deletes every room idle for longer than ROOM_EXPIRY_DAYS. Runs at startup and then hourly. */
-function sweepExpiredRooms(): void {
+/**
+ * Deletes every room idle for longer than ROOM_EXPIRY_DAYS, then posts the notice for every task
+ * that has gone overdue in the rooms left. Runs at startup and then hourly.
+ */
+function sweepRooms(): void {
 	for (const key of log.expired(new Date(), expiryDays)) {
 		endStreams(key, null, "room expired");
 		log.delete(key);
+	}
+	for (const key of log.rooms()) {
+		const [team, roomId] = key.split(":");
+		for (const message of log.noticeOverdue(key)) {
+			push(team, roomId, message);
+		}
 	}
 }
 
@@ -218,8 +227,8 @@ server.on("upgrade", (request, socket, head) => {
 	});
 });
 
-sweepExpiredRooms();
-const sweep = setInterval(sweepExpiredRooms, 60 * 60 * 1000);
+sweepRooms();
+const sweep = setInterval(sweepRooms, 60 * 60 * 1000);
 sweep.unref();
 
 server.listen(port, () => console.log(`partyline listening on :${port}, data in ${dataDir}`));

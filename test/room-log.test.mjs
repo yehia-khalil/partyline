@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
-import { RoomLog } from "../src/core/room-log.ts";
+import { MAX_MESSAGES_PER_MINUTE, RoomLog } from "../src/core/room-log.ts";
 
 const DAY = 86_400_000;
 const ROOM = "core:" + "a".repeat(32);
@@ -572,4 +572,118 @@ test("deleting a room removes what its tasks wait for", () => {
 	const { db, log } = waitingBoard();
 	log.delete(ROOM);
 	assert.equal(db.prepare("SELECT COUNT(*) AS n FROM room_task_waits").get().n, 0);
+});
+
+test("a task that goes overdue posts one board notice, and only once per due date", () => {
+	const { log } = freshLog();
+	log.open(ROOM);
+	log.addTask(ROOM, "alice-claude", { title: "Ship it", due: "2026-12-01" });
+
+	// Not overdue during its due day.
+	assert.deepEqual(log.noticeOverdue(ROOM, new Date("2026-12-01T23:59:00Z")), []);
+
+	const [notice] = log.noticeOverdue(ROOM, new Date("2026-12-02T00:00:00Z"));
+	assert.equal(notice.sender, "[board]");
+	assert.equal(notice.text, "task #1 is overdue (due 2026-12-01)");
+	assert.deepEqual(log.noticeOverdue(ROOM, new Date("2026-12-03T00:00:00Z")), []);
+	assert.equal(log.getTask(ROOM, 1).events.at(-1).action, "overdue");
+
+	// A new due date allows a new notice, even one changed back to a date already noticed.
+	log.updateTask(ROOM, "alice-claude", 1, { action: "edit", due: "2026-12-05", members: ["alice-claude"] });
+	assert.deepEqual(
+		log.noticeOverdue(ROOM, new Date("2026-12-06T00:00:00Z")).map((m) => m.text),
+		["task #1 is overdue (due 2026-12-05)"],
+	);
+	log.updateTask(ROOM, "alice-claude", 1, { action: "edit", due: "2026-12-07", members: ["alice-claude"] });
+	log.updateTask(ROOM, "alice-claude", 1, { action: "edit", due: "2026-12-05", members: ["alice-claude"] });
+	assert.equal(log.noticeOverdue(ROOM, new Date("2026-12-06T00:00:00Z")).length, 1);
+	// Editing something else keeps the notice sent.
+	log.updateTask(ROOM, "alice-claude", 1, { action: "edit", priority: "high", members: ["alice-claude"] });
+	assert.deepEqual(log.noticeOverdue(ROOM, new Date("2026-12-06T00:00:00Z")), []);
+});
+
+test("done and confirmed tasks never get an overdue notice; claimed and blocked ones do", () => {
+	const { log } = freshLog();
+	log.open(ROOM);
+	const members = ["alice-claude", "bob-claude"];
+	log.addTask(ROOM, "alice-claude", { title: "Done", due: "2026-12-01" });
+	log.addTask(ROOM, "alice-claude", { title: "Confirmed", due: "2026-12-01" });
+	log.addTask(ROOM, "alice-claude", { title: "Claimed and blocked", due: "2026-12-01", waitsFor: [1] });
+	for (const n of [1, 2, 3]) {
+		log.updateTask(ROOM, "bob-claude", n, { action: "claim" });
+	}
+	for (const n of [1, 2]) {
+		log.updateTask(ROOM, "bob-claude", n, { action: "done" });
+	}
+	log.updateTask(ROOM, "alice-claude", 2, { action: "confirm", members });
+
+	assert.deepEqual(
+		log.noticeOverdue(ROOM, new Date("2026-12-02T00:00:00Z")).map((m) => m.text),
+		["task #3 is overdue (due 2026-12-01)"],
+	);
+});
+
+test("a closed room never gets an overdue notice", () => {
+	const { log } = freshLog();
+	log.open(ROOM);
+	log.addTask(ROOM, "alice-claude", { title: "Ship it", due: "2026-12-01" });
+	log.close(ROOM);
+
+	assert.deepEqual(log.noticeOverdue(ROOM, new Date("2026-12-02T00:00:00Z")), []);
+	assert.equal(log.nextCheckAt(ROOM, 30).getTime(), log.expiresAt(ROOM, 30).getTime());
+});
+
+test("an overdue notice the rate limit refuses is not marked sent, and is retried", () => {
+	const { db, log } = freshLog();
+	log.open(ROOM);
+	log.addTask(ROOM, "alice-claude", { title: "Ship it", due: "2020-01-01" });
+	for (let i = 1; i < MAX_MESSAGES_PER_MINUTE; i++) {
+		log.post(ROOM, "alice-claude", `message ${i}`);
+	}
+
+	const now = new Date();
+	assert.deepEqual(log.noticeOverdue(ROOM, now), []);
+	assert.equal(log.nextCheckAt(ROOM, 30, now).getTime(), now.getTime() + 60_000);
+
+	// Once the minute has passed, the notice goes out.
+	db.prepare("UPDATE room_messages SET at = ?").run(new Date(now.getTime() - 120_000).toISOString());
+	assert.deepEqual(
+		log.noticeOverdue(ROOM).map((m) => m.text),
+		["task #1 is overdue (due 2020-01-01)"],
+	);
+});
+
+test("the next check is the earlier of the room's expiry and its next task going overdue", () => {
+	const { log } = freshLog();
+	const now = new Date();
+	const day = (offset) => new Date(now.getTime() + offset * DAY).toISOString().slice(0, 10);
+	log.open(ROOM);
+	const expiry = log.expiresAt(ROOM, 30).getTime();
+	assert.equal(log.nextCheckAt(ROOM, 30, now).getTime(), expiry);
+
+	// Due in 5 days: overdue at the start of the day after.
+	log.addTask(ROOM, "alice-claude", { title: "Soon", due: day(5) });
+	log.addTask(ROOM, "alice-claude", { title: "Sooner", due: day(3) });
+	assert.equal(log.nextCheckAt(ROOM, 30, now).toISOString(), `${day(4)}T00:00:00.000Z`);
+
+	// Due after the room expires: expiry comes first.
+	log.updateTask(ROOM, "alice-claude", 1, { action: "edit", due: day(60), members: ["alice-claude"] });
+	log.updateTask(ROOM, "alice-claude", 2, { action: "edit", due: day(60), members: ["alice-claude"] });
+	assert.equal(log.nextCheckAt(ROOM, 30, now).getTime(), log.expiresAt(ROOM, 30).getTime());
+});
+
+test("rooms made before overdue notices gain the column, and their overdue tasks get one notice", () => {
+	const db = new DatabaseSync(":memory:");
+	db.exec(`CREATE TABLE room_tasks (
+		room TEXT NOT NULL, number INTEGER NOT NULL, title TEXT NOT NULL, done_when TEXT, priority TEXT NOT NULL,
+		due TEXT, created_by TEXT NOT NULL, holder TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL, PRIMARY KEY (room, number))`);
+	db.prepare(
+		`INSERT INTO room_tasks VALUES (?, 1, 'Old', NULL, 'normal', '2020-01-01', 'alice-claude', NULL, 'open', ?, ?)`,
+	).run(ROOM, daysAgo(1), daysAgo(1));
+	const log = new RoomLog({ all: (query, ...params) => db.prepare(query).all(...params) });
+	log.open(ROOM);
+
+	assert.equal(log.noticeOverdue(ROOM).length, 1);
+	assert.equal(log.noticeOverdue(ROOM).length, 0);
 });

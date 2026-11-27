@@ -4,8 +4,9 @@ import { type Message, type NewTask, RoomLog, type Task, type TaskChange, type T
 
 /**
  * One room on Cloudflare. A single instance runs per team and room ID, so every message
- * lands here in order and is pushed to every open WebSocket. Its alarm is kept at the
- * room's expiry time (ROOM_EXPIRY_DAYS after its latest activity), when it deletes the room.
+ * lands here in order and is pushed to every open WebSocket. Its alarm is kept at whichever
+ * comes first: the room's expiry time (ROOM_EXPIRY_DAYS after its latest activity), when it
+ * deletes the room, or the moment a task goes overdue, when it posts the overdue notice.
  */
 export class Room extends DurableObject<Env> {
 	private readonly log: RoomLog;
@@ -30,14 +31,21 @@ export class Room extends DurableObject<Env> {
 		return parseExpiryDays(this.env.ROOM_EXPIRY_DAYS);
 	}
 
-	/** Moves the alarm to the room's expiry time. Called whenever its latest activity changes. */
+	/** Moves the alarm to the room's next check. Called whenever its activity or board changes. */
 	private async scheduleExpiry(): Promise<void> {
-		await this.ctx.storage.setAlarm(this.log.expiresAt(this.key, this.expiryDays).getTime());
+		await this.ctx.storage.setAlarm(this.log.nextCheckAt(this.key, this.expiryDays).getTime());
 	}
 
-	/** Rooms made before expiry existed have no alarm: any room that is used gets one. */
+	/**
+	 * Rooms made before expiry existed have no alarm, and rooms made before overdue notices have
+	 * theirs at expiry only: any room that is used gets its alarm moved earlier if it needs to be.
+	 */
 	private async ensureExpiry(): Promise<void> {
-		if (this.log.exists(this.key) && (await this.ctx.storage.getAlarm()) === null) {
+		if (!this.log.exists(this.key)) {
+			return;
+		}
+		const alarm = await this.ctx.storage.getAlarm();
+		if (alarm === null || alarm > this.log.nextCheckAt(this.key, this.expiryDays).getTime()) {
 			await this.scheduleExpiry();
 		}
 	}
@@ -134,8 +142,9 @@ export class Room extends DurableObject<Env> {
 	}
 
 	/**
-	 * Deletes the room once it has expired, or moves the alarm if activity pushed expiry later.
-	 * Reads the room from its own database rather than the object's name, which an alarm may not have.
+	 * Deletes the room once it has expired, otherwise posts any overdue notices, then moves the
+	 * alarm to the next check. Reads the room from its own database rather than the object's name,
+	 * which an alarm may not have.
 	 */
 	async alarm(): Promise<void> {
 		const days = this.expiryDays;
@@ -143,7 +152,13 @@ export class Room extends DurableObject<Env> {
 			this.endStreams("room expired");
 			this.log.delete(room);
 		}
-		const next = this.log.rooms().map((room) => this.log.expiresAt(room, days).getTime());
+		for (const room of this.log.rooms()) {
+			const roomId = room.split(":").at(-1) ?? "";
+			for (const message of this.log.noticeOverdue(room)) {
+				this.send(formatPush(roomId, message));
+			}
+		}
+		const next = this.log.rooms().map((room) => this.log.nextCheckAt(room, days).getTime());
 		if (next.length > 0) {
 			await this.ctx.storage.setAlarm(Math.min(...next));
 		}

@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
-import { listTeamRooms, roomKey, roomList } from "../src/core/app.ts";
+import { describeRoom, listTeamRooms, roomKey, roomList } from "../src/core/app.ts";
 import { RoomIndex } from "../src/core/room-index.ts";
 import { RoomLog } from "../src/core/room-log.ts";
 
@@ -224,4 +224,48 @@ test("the team index stores no message or task text", () => {
 
 	const stored = JSON.stringify(db.prepare("SELECT * FROM team_rooms").all());
 	assert.doesNotMatch(stored, /secret|alice/);
+});
+
+test("a room's participants are who posted or took a board step there, not the board or other rooms", () => {
+	const { log } = freshLog();
+	const key = roomKey("core", A);
+	const other = roomKey("core", B);
+	log.open(key);
+	log.open(other);
+	log.post(other, "carol-claude", "elsewhere");
+	assert.deepEqual(log.participants(key), []);
+
+	log.post(key, ALICE, "hello");
+	log.addTask(key, BOB, { title: "bob's", due: day(-1) });
+	log.noticeOverdue(key);
+	log.updateTask(key, ALICE, 1, { action: "claim" });
+
+	const participants = log.participants(key);
+	assert.deepEqual(
+		participants.map((p) => p.name),
+		[ALICE, BOB],
+	);
+	const alice = participants[0];
+	assert.ok(alice.firstSeen < alice.lastSeen || alice.firstSeen === alice.lastSeen);
+	assert.equal(alice.lastSeen, log.getTask(key, 1).events.at(-1).at);
+});
+
+test("describeRoom is the room's list entry plus participants, and null once it is gone or expired", () => {
+	const { db, log } = freshLog();
+	const key = roomKey("core", A);
+	assert.equal(describeRoom(log, key, 30, 0), null);
+	log.open(key);
+	log.post(key, ALICE, "hello");
+
+	const { participants, connectedCount, ...entry } = describeRoom(log, key, 30, 2);
+	assert.deepEqual(entry, listTeamRooms(log, "core", 30)[0]);
+	assert.deepEqual(
+		participants.map((p) => p.name),
+		[ALICE],
+	);
+	assert.equal(connectedCount, 2);
+
+	db.prepare("UPDATE rooms SET opened_at = ?").run(new Date(Date.now() - 40 * DAY).toISOString());
+	db.prepare("UPDATE room_messages SET at = ?").run(new Date(Date.now() - 31 * DAY).toISOString());
+	assert.equal(describeRoom(log, key, 30, 0), null);
 });

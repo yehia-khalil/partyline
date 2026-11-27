@@ -34,9 +34,12 @@ let base = remote;
 let server;
 
 const VIEWER_A = process.env.VIEWER_A ?? "v".repeat(64);
-// core uses the grouped shape with a viewer; other keeps the older members-only shorthand.
+// core uses the grouped shape with a viewer and an agent owner; other keeps the older members-only shorthand.
 const TEAMS = {
-	core: { members: { "alice-claude": TOKEN_A, "bob-claude": TOKEN_A2 }, viewers: { alice: VIEWER_A } },
+	core: {
+		members: { "alice-claude": { token: TOKEN_A, owner: "alice" }, "bob-claude": TOKEN_A2 },
+		viewers: { alice: VIEWER_A },
+	},
 	other: { "carol-claude": TOKEN_B },
 };
 
@@ -105,6 +108,14 @@ function listen(wsUrl) {
 	const closed = new Promise((resolve) => ws.addEventListener("close", resolve));
 
 	return { ws, frames, opened, closed };
+}
+
+/** A people API call: status, headers and the parsed JSON body. */
+async function api(path, token = VIEWER_A) {
+	const response = await fetch(`${base}${path}`, token ? { headers: { Authorization: `Bearer ${token}` } } : {});
+	const text = await response.text();
+
+	return { status: response.status, headers: response.headers, text, body: JSON.parse(text) };
 }
 
 before(async () => {
@@ -584,5 +595,241 @@ test(
 
 		await stopNode();
 		base = await startNode(18793);
+	},
+);
+
+test("the people API needs a viewer token: none or an unknown one is 401, a member's is 403", async () => {
+	assert.equal((await api("/api", null)).status, 401);
+	assert.equal((await api("/api/t/core/rooms", null)).status, 401);
+	assert.equal((await api("/api/t/core/rooms", "x".repeat(64))).status, 401);
+	const member = await api("/api/t/core/rooms", TOKEN_A);
+	assert.equal(member.status, 403);
+	assert.match(member.body.error, /viewer tokens/);
+	assert.equal((await api("/api", TOKEN_B)).status, 403);
+
+	const version = await api("/api");
+	assert.equal(version.status, 200);
+	assert.deepEqual(version.body, { version: 1 });
+});
+
+test("every people API reply is JSON, not sniffed, not cached and without CORS", async () => {
+	const { roomId } = await createRoom();
+	for (const path of ["/api", "/api/t/core/rooms", `/api/t/core/rooms/${roomId}`, "/api/t/core/rooms/nope"]) {
+		for (const token of [VIEWER_A, TOKEN_A, null]) {
+			const { headers } = await api(path, token);
+			assert.equal(headers.get("content-type"), "application/json", path);
+			assert.equal(headers.get("x-content-type-options"), "nosniff", path);
+			assert.equal(headers.get("cache-control"), "no-store", path);
+			assert.equal(headers.get("access-control-allow-origin"), null, path);
+		}
+	}
+	const post = await fetch(`${base}/api/t/core/rooms`, {
+		method: "POST",
+		headers: { Authorization: `Bearer ${VIEWER_A}` },
+	});
+	assert.equal(post.status, 405);
+});
+
+test("a message containing <script> comes back as plain JSON text", async () => {
+	const { roomId } = await createRoom();
+	const text = '<script>alert("x")</script> & <b>bold</b>';
+	await call(TOKEN_A, "post_message", { room: roomId, text });
+
+	const reply = await api(`/api/t/core/rooms/${roomId}/messages`);
+	assert.equal(reply.headers.get("content-type"), "application/json");
+	assert.equal(reply.body.messages[0].text, text);
+	assert.equal(reply.body.messages[0].sender, "alice-claude");
+	assert.ok(reply.text.includes(JSON.stringify(text)));
+});
+
+test("another team's room, or one that doesn't exist, answers 404 on every route", async () => {
+	const { roomId: theirs } = await createRoom(TOKEN_B);
+	await call(TOKEN_B, "post_message", { room: theirs, text: "private" });
+	await call(TOKEN_B, "add_task", { room: theirs, title: "private" });
+	const missing = "f".repeat(32);
+	for (const path of [
+		`/api/t/core/rooms/${theirs}`,
+		`/api/t/core/rooms/${theirs}/messages`,
+		`/api/t/core/rooms/${theirs}/tasks`,
+		`/api/t/core/rooms/${theirs}/tasks/1`,
+		`/api/t/other/rooms/${theirs}`,
+		`/api/t/other/rooms/${theirs}/messages`,
+		"/api/t/other/rooms",
+		`/api/t/core/rooms/${missing}`,
+		`/api/t/core/rooms/${missing}/messages`,
+	]) {
+		const reply = await api(path);
+		assert.equal(reply.status, 404, path);
+		assert.doesNotMatch(reply.text, /private/, path);
+	}
+	assert.ok(!(await api("/api/t/core/rooms")).body.rooms.some((room) => room.id === theirs));
+});
+
+test("messages page by since and limit, say whether there are more, and whether the room is closed", async () => {
+	const { roomId } = await createRoom();
+	for (const text of ["one", "two", "three"]) {
+		await call(TOKEN_A, "post_message", { room: roomId, text });
+	}
+	const path = `/api/t/core/rooms/${roomId}/messages`;
+
+	const first = (await api(`${path}?limit=2`)).body;
+	assert.deepEqual(
+		first.messages.map((m) => [m.seq, m.text]),
+		[
+			[1, "one"],
+			[2, "two"],
+		],
+	);
+	assert.equal(first.more, true);
+	assert.equal(first.closed, false);
+
+	const rest = (await api(`${path}?since=2&limit=2`)).body;
+	assert.deepEqual(
+		rest.messages.map((m) => m.text),
+		["three"],
+	);
+	assert.equal(rest.more, false);
+
+	for (const bad of ["limit=0", "limit=201", "limit=abc", "since=-1", "since=1.5"]) {
+		assert.equal((await api(`${path}?${bad}`)).status, 400, bad);
+	}
+	assert.equal((await api(`${path}?limit=200`)).status, 200);
+
+	await call(TOKEN_A, "close_room", { room: roomId });
+	assert.equal((await api(path)).body.closed, true);
+});
+
+test("tasks come with overdue and blocked as the board shows them, and one task with its steps", async () => {
+	const { roomId } = await createRoom();
+	const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+	await call(TOKEN_A, "add_task", { room: roomId, title: "<i>late</i>", due: yesterday });
+	await call(TOKEN_A, "add_task", { room: roomId, title: "after", waits_for: [1] });
+	await call(TOKEN_A, "add_task", { room: roomId, title: "finished" });
+	await call(TOKEN_A2, "update_task", { room: roomId, task: 3, action: "claim" });
+	await call(TOKEN_A2, "update_task", { room: roomId, task: 3, action: "done" });
+	await call(TOKEN_A, "update_task", { room: roomId, task: 3, action: "confirm" });
+	const path = `/api/t/core/rooms/${roomId}/tasks`;
+
+	const { tasks } = (await api(path)).body;
+	assert.deepEqual(
+		tasks.map((t) => [t.number, t.title, t.overdue, t.blocked]),
+		[
+			[1, "<i>late</i>", true, false],
+			[2, "after", false, true],
+		],
+	);
+	assert.deepEqual(tasks[1].waitsFor, [1]);
+	assert.deepEqual(
+		(await api(`${path}?include_confirmed=true`)).body.tasks.map((t) => t.number),
+		[1, 2, 3],
+	);
+	assert.equal((await api(`${path}?include_confirmed=yes`)).status, 400);
+
+	const one = (await api(`${path}/3`)).body;
+	assert.equal(one.task.status, "confirmed");
+	assert.equal(one.task.overdue, false);
+	assert.deepEqual(
+		one.events.map((e) => [e.action, e.actor]),
+		[
+			["add", "alice-claude"],
+			["claim", "bob-claude"],
+			["done", "bob-claude"],
+			["confirm", "alice-claude"],
+		],
+	);
+	assert.equal(one.earlier, 0);
+	assert.equal((await api(`${path}/9`)).status, 404);
+	assert.equal((await api(`${path}/0`)).status, 404);
+});
+
+test("a room's detail lists only who posted or acted in it, with each agent's owner or null", async () => {
+	const { roomId } = await createRoom();
+	await call(TOKEN_A, "post_message", { room: roomId, text: "hello" });
+	await call(TOKEN_A2, "add_task", { room: roomId, title: "bob's" });
+	// carol-claude posts in her own team's room, not this one.
+	const { roomId: theirs } = await createRoom(TOKEN_B);
+	await call(TOKEN_B, "post_message", { room: theirs, text: "elsewhere" });
+
+	const { room } = (await api(`/api/t/core/rooms/${roomId}`)).body;
+	const listed = (await api("/api/t/core/rooms")).body.rooms.find((entry) => entry.id === roomId);
+	const { participants, connectedCount, ...row } = room;
+	assert.deepEqual(row, listed);
+	assert.deepEqual(
+		participants.map(({ name, owner }) => [name, owner]),
+		[
+			["alice-claude", remote ? participants[0].owner : "alice"],
+			["bob-claude", remote ? participants[1].owner : null],
+		],
+	);
+	for (const participant of participants) {
+		assert.ok(participant.firstSeen <= participant.lastSeen);
+	}
+	assert.equal(connectedCount, 0);
+});
+
+test("a room's connectedCount counts its open streams", async () => {
+	const { roomId, wsUrl } = await createRoom();
+	const path = `/api/t/core/rooms/${roomId}`;
+	assert.equal((await api(path)).body.room.connectedCount, 0);
+
+	const stream = listen(wsUrl);
+	await stream.opened;
+	assert.equal((await api(path)).body.room.connectedCount, 1);
+
+	stream.ws.close();
+	await stream.closed;
+	let count = 1;
+	for (let i = 0; i < 50 && count !== 0; i++) {
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		count = (await api(path)).body.room.connectedCount;
+	}
+	assert.equal(count, 0);
+});
+
+test(
+	"the room list via /api follows a room through open, post, task change, close and expiry",
+	{ skip: Boolean(remote) },
+	async () => {
+		const entry = async (id) => (await api("/api/t/core/rooms")).body.rooms.find((room) => room.id === id);
+		const { roomId } = await createRoom();
+		const opened = await entry(roomId);
+		assert.equal(opened.lastSeq, 0);
+		assert.equal(opened.closed, null);
+		assert.deepEqual(opened.tasks, { open: 0, claimed: 0, done: 0, confirmed: 0, overdue: 0, blocked: 0 });
+
+		await call(TOKEN_A, "post_message", { room: roomId, text: "hello" });
+		const posted = await entry(roomId);
+		assert.equal(posted.lastSeq, 1);
+		assert.ok(posted.lastActivity >= opened.lastActivity);
+		assert.equal((await api("/api/t/core/rooms")).body.rooms[0].id, roomId);
+
+		await call(TOKEN_A, "add_task", { room: roomId, title: "build it" });
+		await call(TOKEN_A2, "update_task", { room: roomId, task: 1, action: "claim" });
+		assert.deepEqual((await entry(roomId)).tasks, {
+			open: 0,
+			claimed: 1,
+			done: 0,
+			confirmed: 0,
+			overdue: 0,
+			blocked: 0,
+		});
+
+		await call(TOKEN_A, "close_room", { room: roomId });
+		assert.notEqual((await entry(roomId)).closed, null);
+		assert.equal((await api(`/api/t/core/rooms/${roomId}/messages`)).body.closed, true);
+
+		// Age the room past the default 30 days while the server is down; it is gone after the restart.
+		await stopNode();
+		const db = new DatabaseSync(join(dataDir, "partyline.db"));
+		const longAgo = new Date(Date.now() - 31 * 86_400_000).toISOString();
+		const key = `core:${roomId}`;
+		db.prepare("UPDATE rooms SET opened_at = ?, closed_at = ? WHERE room = ?").run(longAgo, longAgo, key);
+		db.prepare("UPDATE room_messages SET at = ? WHERE room = ?").run(longAgo, key);
+		db.prepare("UPDATE room_task_events SET at = ? WHERE room = ?").run(longAgo, key);
+		db.close();
+		base = await startNode(18794);
+
+		assert.equal(await entry(roomId), undefined);
+		assert.equal((await api(`/api/t/core/rooms/${roomId}`)).status, 404);
 	},
 );
